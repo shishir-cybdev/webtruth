@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -48,6 +48,14 @@ class InvestigationCreateRequest(BaseModel):
         default=None,
         max_length=500,
         description="Optional user criteria or key features to prioritize"
+    )
+    mode: Optional[str] = Field(
+        default=None,
+        description="'real' for multi-agent MCP orchestration, 'demo' for placeholder",
+    )
+    target_urls: Optional[List[str]] = Field(
+        default=None,
+        description="Explicit target URLs for investigation",
     )
 
     @field_validator("query")
@@ -110,6 +118,26 @@ class InvestigationResponse(BaseModel):
     summary: Optional[str] = Field(
         default=None,
         description="High-level placeholder summary of findings"
+    )
+    evidence_ids: List[str] = Field(
+        default_factory=list,
+        description="Persisted Evidence record IDs",
+    )
+    comparison_result: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Synthesized comparison output across retailers",
+    )
+    trust_report: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Structured trust and integrity assessment report",
+    )
+    target_urls: List[str] = Field(
+        default_factory=list,
+        description="URLs analyzed during the investigation",
+    )
+    tool_logs_count: int = Field(
+        default=0,
+        description="Count of MCP tool executions across all servers",
     )
 
 
