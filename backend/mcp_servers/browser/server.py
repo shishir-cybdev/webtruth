@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 from typing import Optional
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import quote, quote_plus, urljoin, urlparse
 from bs4 import BeautifulSoup
 from mcp.server.mcpserver import MCPServer
 
@@ -230,6 +230,20 @@ async def inspect_page_metadata(url: str) -> PageMetadataResult:
     )
 
 
+def _is_ad_or_tracker_url(url: str) -> bool:
+    """Return True if URL is an ad-server, click-tracker, or sponsored redirect."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    if host.startswith("aax-") or host.startswith("aax.") or ".ad." in host or "doubleclick" in host:
+        return True
+    if any(marker in path for marker in ("/sspa/click", "/gp/slredirect", "/x/c/")):
+        return True
+    if "http://" in path or "https://" in path:
+        return True
+    return False
+
+
 def _candidate_text_from_link(url: str, link_text: Optional[str]) -> str:
     """Build clean candidate text from link text and readable URL slug (excluding opaque IDs)."""
     path = urlparse(url).path
@@ -305,6 +319,10 @@ async def discover_product_urls(
         ("croma.com", f"https://www.croma.com/searchB?q={encoded}", ("/p/",)),
         ("flipkart.com", f"https://www.flipkart.com/search?q={encoded}", ("/p/",)),
     ]
+    if "dell" in query.lower():
+        search_endpoints.append(
+            ("dell.com", f"https://www.dell.com/en-in/search/{quote(query.strip())}", ("/p/", "/pd/", "/dp/"))
+        )
 
     discovered: list[DiscoveredUrlItem] = []
     seen_urls: set[str] = set()
@@ -342,6 +360,8 @@ async def discover_product_urls(
                 parsed = urlparse(abs_url)
                 if parsed.scheme not in ("http", "https"):
                     continue
+                if _is_ad_or_tracker_url(abs_url):
+                    continue
                 allowed, _ = BrowserConfig.is_url_permitted(abs_url)
                 if not allowed:
                     continue
@@ -366,6 +386,12 @@ async def discover_product_urls(
         return_exceptions=False,
     )
 
+    rejected_statuses = {
+        ProductMatchStatus.MODEL_MISMATCH.value,
+        ProductMatchStatus.BRAND_MISMATCH.value,
+        ProductMatchStatus.CATEGORY_MISMATCH.value,
+        ProductMatchStatus.ACCESSORY.value,
+    }
     scored_candidates: list[tuple[int, int, DiscoveredUrlItem]] = []
     idx = 0
     for found_list, blk_err in results:
@@ -374,7 +400,9 @@ async def discover_product_urls(
         for item in found_list:
             if item.url not in seen_urls:
                 seen_urls.add(item.url)
-                cand_score, _ = score_discovered_candidate(query, category, item.url, item.link_text)
+                cand_score, cand_status = score_discovered_candidate(query, category, item.url, item.link_text)
+                if cand_status in rejected_statuses:
+                    continue
                 scored_candidates.append((cand_score, -idx, item))
                 idx += 1
 

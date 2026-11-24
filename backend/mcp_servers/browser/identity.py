@@ -188,11 +188,19 @@ def infer_category(
     return None
 
 
+SPEC_UNITS = {
+    "gb", "tb", "mb", "kb",
+    "hz", "mhz", "ghz",
+    "mah", "w", "wh", "whr",
+    "inch", "inches", "cm", "mm",
+}
+
+
 def extract_model_tokens(text: str, brand: Optional[str] = None) -> List[str]:
     """Extract ordered model-identifying tokens from query or product title.
     
-    Ignores generic retail noise (5G, 12GB, 256GB, colors, 'smartphone', 'laptop', etc.).
-    Preserves exact alphanumeric model tokens like '13', '13s', '13r', '9530', 'pro'.
+    Ignores generic retail noise (5G, 12GB, 16 GB, 512 GB, 165 Hz, colors, etc.).
+    Preserves exact alphanumeric model tokens like '13', '13s', '13r', '16', '9530', 'pro'.
     """
     noise_words = {
         "the", "and", "with", "for", "new", "official", "store", "india", "online",
@@ -201,19 +209,25 @@ def extract_model_tokens(text: str, brand: Optional[str] = None) -> List[str]:
         "tablet", "monitor", "camera", "headphones", "black", "white", "blue", "green",
         "silver", "gold", "grey", "gray", "arctic", "dawn", "midnight", "obsidian",
         "emerald", "edition", "smarter", "ai", "lifetime", "display", "warranty",
-        "unlocked", "dual", "sim", "gb", "tb", "mah", "inch", "inches", "cm",
-    }
-    tokens = tokenize_alnum(text)
+        "unlocked", "dual", "sim",
+    } | SPEC_UNITS
+    # Normalize decimal sizes like '15.6 inch' -> '15.6' before alphanumeric tokenization
+    cleaned_text = re.sub(
+        r"\b\d+(?:\.\d+)?\s*(?:gb|tb|mb|kb|hz|mhz|ghz|mah|whr|wh|w|inches|inch|cm|mm)\b",
+        " ",
+        (text or "").lower(),
+    )
+    tokens = tokenize_alnum(cleaned_text)
     model_tokens: List[str] = []
-    for t in tokens:
+    for i, t in enumerate(tokens):
         if brand and t == brand.lower():
             continue
         if t in KNOWN_BRANDS:
             continue
         if t in noise_words:
             continue
-        # Filter storage/RAM sizes like 12gb, 256gb, 1tb, 512gb, 16gb
-        if re.fullmatch(r"\d+(gb|tb|mb|mah|hz|w|whr)", t):
+        # Skip a bare numeric token if immediately followed by a spec unit (fallback safety)
+        if re.fullmatch(r"\d+", t) and i + 1 < len(tokens) and tokens[i + 1] in SPEC_UNITS:
             continue
         model_tokens.append(t)
     return model_tokens
