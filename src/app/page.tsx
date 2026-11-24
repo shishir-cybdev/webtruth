@@ -62,13 +62,33 @@ const FEATURES = [
 
 function HeroSearchBar() {
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("laptop");
+  const [budgetInr, setBudgetInr] = useState("");
+  const [targetUrls, setTargetUrls] = useState("");
+  const [mode, setMode] = useState<"real" | "demo">("real");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) {
-      router.push(`/investigate?q=${encodeURIComponent(query.trim())}`);
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setError("Please enter at least 2 characters for the product query.");
+      return;
     }
+    if (budgetInr && (Number.isNaN(Number(budgetInr)) || Number(budgetInr) <= 0)) {
+      setError("Budget in INR must be a positive number.");
+      return;
+    }
+    setError(null);
+    const params = new URLSearchParams();
+    params.set("q", trimmed);
+    if (category) params.set("category", category);
+    if (budgetInr) params.set("budget", budgetInr);
+    if (targetUrls.trim()) params.set("urls", targetUrls.trim());
+    params.set("mode", mode);
+    router.push(`/investigate?${params.toString()}`);
   };
 
   return (
@@ -80,8 +100,11 @@ function HeroSearchBar() {
           <input
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder='Try "Dell XPS 15 laptop" or "Sony WH-1000XM5"…'
+            onChange={(e) => {
+              setQuery(e.target.value);
+              if (error) setError(null);
+            }}
+            placeholder='Try "Dell XPS 15 9530" or "Sony WH-1000XM5"…'
             className="w-full bg-transparent pl-13 pr-36 py-5 text-slate-200 placeholder-slate-500 focus:outline-none text-base"
             aria-label="Search for a product to investigate"
             style={{ paddingLeft: "3.25rem" }}
@@ -96,6 +119,89 @@ function HeroSearchBar() {
           </button>
         </div>
       </div>
+
+      {/* Mode & Optional Parameters Bar */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
+        <div className="flex items-center gap-1.5 glass rounded-lg p-1 border border-slate-800">
+          <button
+            type="button"
+            onClick={() => setMode("real")}
+            className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+              mode === "real"
+                ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            Live MCP Mode
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("demo")}
+            className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+              mode === "demo"
+                ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            Demo Simulation
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="text-slate-400 hover:text-cyan-400 transition-colors font-mono"
+        >
+          {showAdvanced ? "− Hide options" : "+ Budget / Category / Target URLs"}
+        </button>
+      </div>
+
+      {showAdvanced && (
+        <div className="mt-3 glass rounded-xl border border-slate-800 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
+          <div>
+            <label className="block text-[11px] font-mono text-slate-400 mb-1">Category</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full bg-slate-950/70 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50"
+            >
+              <option value="laptop">Laptop</option>
+              <option value="smartphone">Smartphone</option>
+              <option value="headphones">Audio / Headphones</option>
+              <option value="monitor">Monitor</option>
+              <option value="tablet">Tablet</option>
+              <option value="camera">Camera</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-mono text-slate-400 mb-1">Max Budget (INR)</label>
+            <input
+              type="number"
+              min="1"
+              placeholder="e.g. 185000"
+              value={budgetInr}
+              onChange={(e) => setBudgetInr(e.target.value)}
+              className="w-full bg-slate-950/70 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-[11px] font-mono text-slate-400 mb-1">
+              Optional Target URLs (comma-separated, public pages or test fixtures)
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. https://dell.com/in/p/xps-15-9530-laptop"
+              value={targetUrls}
+              onChange={(e) => setTargetUrls(e.target.value)}
+              className="w-full bg-slate-950/70 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <p className="mt-2 text-xs text-red-400 text-left px-1">{error}</p>
+      )}
     </form>
   );
 }
