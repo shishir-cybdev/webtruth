@@ -225,6 +225,7 @@ export interface InvestigationResponse {
   id: string;
   query: string;
   category?: string | null;
+  resolved_category?: string | null;
   budget_inr?: number | null;
   status: BackendInvestigationStatus;
   created_at: string;

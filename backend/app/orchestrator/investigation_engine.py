@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+from app.orchestrator.category import classify_query_category, normalize_category
 from app.orchestrator.errors import (
     InvestigationNotFoundError,
     MCPToolExecutionError,
@@ -135,10 +136,13 @@ class InvestigationEngine:
             ),
         }
 
+        explicit_cat = normalize_category(category)
+        resolved_cat = explicit_cat if explicit_cat is not None else classify_query_category(query)
+
         record = InvestigationRecord(
             investigation_id=inv_id,
             query=query.strip(),
-            category=category.strip().lower() if category else "laptop",
+            category=resolved_cat,
             budget_inr=budget_inr,
             notes=notes,
             status="pending",

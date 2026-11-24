@@ -88,6 +88,7 @@ def map_record_to_response(rec: InvestigationRecord) -> InvestigationResponse:
         id=rec.investigation_id,
         query=rec.query,
         category=rec.category,
+        resolved_category=rec.category,
         budget_inr=rec.budget_inr,
         status=inv_status_map.get(rec.status, InvestigationStatus.PROCESSING),
         created_at=datetime.fromisoformat(rec.created_at_utc),

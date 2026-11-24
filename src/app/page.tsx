@@ -62,7 +62,7 @@ const FEATURES = [
 
 function HeroSearchBar() {
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("laptop");
+  const [category, setCategory] = useState("");
   const [budgetInr, setBudgetInr] = useState("");
   const [targetUrls, setTargetUrls] = useState("");
   const [mode, setMode] = useState<"real" | "demo">("real");
@@ -165,8 +165,9 @@ function HeroSearchBar() {
               onChange={(e) => setCategory(e.target.value)}
               className="w-full bg-slate-950/70 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50"
             >
-              <option value="laptop">Laptop</option>
+              <option value="">Auto-detect</option>
               <option value="smartphone">Smartphone</option>
+              <option value="laptop">Laptop</option>
               <option value="headphones">Audio / Headphones</option>
               <option value="monitor">Monitor</option>
               <option value="tablet">Tablet</option>

@@ -35,7 +35,7 @@ class InvestigationCreateRequest(BaseModel):
         default=None,
         max_length=50,
         description="Optional product category (e.g. laptop, smartphone, audio)",
-        examples=["laptop"]
+        examples=["smartphone", "laptop", "headphones"]
     )
     budget_inr: Optional[float] = Field(
         default=None,
@@ -71,8 +71,8 @@ class InvestigationCreateRequest(BaseModel):
     def clean_category(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        cleaned = v.strip().lower()
-        return cleaned if cleaned else None
+        from app.orchestrator.category import normalize_category
+        return normalize_category(v)
 
 
 class InvestigationStepInfo(BaseModel):
@@ -92,6 +92,10 @@ class InvestigationResponse(BaseModel):
     id: str = Field(..., description="Unique investigation identifier (inv_...)")
     query: str = Field(..., description="Investigated product search query")
     category: Optional[str] = Field(default=None, description="Product category")
+    resolved_category: Optional[str] = Field(
+        default=None,
+        description="Final resolved category (from user selection or query-based inference)",
+    )
     budget_inr: Optional[float] = Field(default=None, description="User budget in INR")
     status: InvestigationStatus = Field(..., description="Current status of the investigation")
     created_at: datetime = Field(..., description="Creation timestamp in UTC")

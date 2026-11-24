@@ -92,7 +92,7 @@ export function InvestigationResultsDashboard({
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Category: <span className="text-slate-200">{investigation.category || "unspecified"}</span>
+                Category: <span className="text-slate-200">{investigation.resolved_category || investigation.category || "unspecified"}</span>
                 {investigation.budget_inr ? (
                   <>
                     {" "}• Budget Cap: <span className="text-cyan-400 font-mono">₹{investigation.budget_inr.toLocaleString("en-IN")}</span>
