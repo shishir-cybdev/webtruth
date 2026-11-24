@@ -84,6 +84,10 @@ class ExtractedProductDataResult(BaseModel):
     )
     match_reason: Optional[str] = Field(default=None, description="Explanation of product identity match result")
     extracted_category: Optional[str] = Field(default=None, description="Inferred product category from page content")
+    extraction_warnings: List[str] = Field(
+        default_factory=list,
+        description="Non-fatal extraction warnings (e.g. ambiguous or missing price)",
+    )
     error: Optional[str] = Field(default=None, description="Error explanation if extraction failed")
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Optional
 from urllib.parse import quote_plus, urljoin, urlparse
 from bs4 import BeautifulSoup
@@ -8,7 +9,12 @@ from mcp.server.mcpserver import MCPServer
 from mcp_servers.browser.browser_manager import browser_manager
 from mcp_servers.browser.config import BrowserConfig
 from mcp_servers.browser.extractor import ProductExtractor
-from mcp_servers.browser.identity import ProductMatchStatus, evaluate_product_identity
+from mcp_servers.browser.identity import (
+    ProductMatchStatus,
+    evaluate_product_identity,
+    extract_model_tokens,
+    tokenize_alnum,
+)
 from mcp_servers.browser.schemas import (
     DiscoverProductUrlsResult,
     DiscoveredUrlItem,
@@ -224,6 +230,58 @@ async def inspect_page_metadata(url: str) -> PageMetadataResult:
     )
 
 
+def _candidate_text_from_link(url: str, link_text: Optional[str]) -> str:
+    """Build clean candidate text from link text and readable URL slug (excluding opaque IDs)."""
+    path = urlparse(url).path
+    # Strip opaque retailer IDs like /dp/B0DGJHBX5Y, /p/itm7971f594b0906, /ref=sr_1_1
+    cleaned_path = re.sub(r"/(?:dp|gp/product)/[A-Za-z0-9]+", " ", path)
+    cleaned_path = re.sub(r"/p/itm[A-Za-z0-9]+", " ", cleaned_path)
+    cleaned_path = re.sub(r"/ref=[^/]+", " ", cleaned_path)
+    slug_text = re.sub(r"[-_/]+", " ", cleaned_path).strip()
+    if link_text and len(link_text.strip()) >= 5:
+        return f"{link_text.strip()} {slug_text}".strip()
+    return slug_text or (link_text or "").strip()
+
+
+def score_discovered_candidate(
+    query: str,
+    category: Optional[str],
+    url: str,
+    link_text: Optional[str],
+) -> tuple[int, str]:
+    """Score a discovered product link so exact matches rank ahead of variants and accessories."""
+    cand_text = _candidate_text_from_link(url, link_text)
+    id_res = evaluate_product_identity(
+        query=query,
+        extracted_product_name=cand_text,
+        source_url=url,
+        expected_category=category,
+    )
+
+    status_weights = {
+        ProductMatchStatus.EXACT_MATCH: 1000,
+        ProductMatchStatus.RELATED_VARIANT: 200,
+        ProductMatchStatus.INSUFFICIENT_IDENTITY: 0,
+        ProductMatchStatus.MODEL_MISMATCH: -300,
+        ProductMatchStatus.CATEGORY_MISMATCH: -400,
+        ProductMatchStatus.BRAND_MISMATCH: -500,
+        ProductMatchStatus.ACCESSORY: -1000,
+    }
+    score = status_weights.get(id_res.match_status, 0)
+
+    # Query-token coverage bonus
+    q_tokens = set(extract_model_tokens(query, id_res.query_brand))
+    c_tokens = set(tokenize_alnum(cand_text))
+    score += 20 * len(q_tokens & c_tokens)
+
+    # Product detail URL bonus
+    path = urlparse(url).path
+    if any(m in path for m in ("/dp/", "/gp/product/", "/p/")):
+        score += 10
+
+    return score, id_res.match_status.value
+
+
 @server.tool(
     name="discover_product_urls",
     description=(
@@ -276,6 +334,8 @@ async def discover_product_urls(
                 return [], f"{domain}: {val_err}"
 
             soup = BeautifulSoup(page_data.html_content or "", "html.parser")
+            per_domain_limit = max(max_results * 4, 12)
+            local_seen: set[str] = set()
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
                 abs_url = urljoin(page_data.final_url or search_url, href)
@@ -287,11 +347,14 @@ async def discover_product_urls(
                     continue
                 if any(m in parsed.path for m in product_markers):
                     clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                    link_text = a.get_text(" ", strip=True)[:120] or None
+                    if clean_url in local_seen:
+                        continue
+                    local_seen.add(clean_url)
+                    link_text = a.get_text(" ", strip=True)[:160] or None
                     local_found.append(
                         DiscoveredUrlItem(url=clean_url, domain=domain, link_text=link_text)
                     )
-                    if len(local_found) >= max_results:
+                    if len(local_found) >= per_domain_limit:
                         break
             return local_found, None
         except Exception as ex:
@@ -303,13 +366,22 @@ async def discover_product_urls(
         return_exceptions=False,
     )
 
+    scored_candidates: list[tuple[int, int, DiscoveredUrlItem]] = []
+    idx = 0
     for found_list, blk_err in results:
         if blk_err:
             blocked_sources.append(blk_err)
         for item in found_list:
-            if item.url not in seen_urls and len(discovered) < max_results:
+            if item.url not in seen_urls:
                 seen_urls.add(item.url)
-                discovered.append(item)
+                cand_score, _ = score_discovered_candidate(query, category, item.url, item.link_text)
+                scored_candidates.append((cand_score, -idx, item))
+                idx += 1
+
+    # Rank exact matches ahead of variants and accessories before applying max_results
+    scored_candidates.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    for _, _, item in scored_candidates[:max_results]:
+        discovered.append(item)
 
     if not discovered:
         notes.append(

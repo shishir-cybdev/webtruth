@@ -55,6 +55,82 @@ def detect_currency(price_str: Optional[str]) -> Optional[str]:
     return None
 
 
+BOILERPLATE_HEADING_MARKERS = (
+    "add to your order",
+    "added to cart",
+    "shopping cart",
+    "frequently bought together",
+    "sign in",
+    "customer reviews",
+    "sponsored",
+    "related products",
+    "compare with similar items",
+)
+
+DISQUALIFIED_PRICE_CONTEXT_MARKERS = (
+    "protection",
+    "applecare",
+    "extended warranty",
+    "warranty plan",
+    "add to your order",
+    "added to cart",
+    "frequently bought",
+    "accessory",
+    "bundle",
+    "upsell",
+    "a-text-price",
+    "basisprice",
+    "strike",
+    "list-price",
+    "mrp",
+    "emi",
+    "installment",
+    "per month",
+    "/mo",
+)
+
+
+def _is_boilerplate_heading(text: Optional[str]) -> bool:
+    """Return True if a heading is a UI/cart/modal label rather than a product title."""
+    if not text:
+        return True
+    lowered = text.strip().lower()
+    if len(lowered) < 3:
+        return True
+    return any(marker in lowered for marker in BOILERPLATE_HEADING_MARKERS)
+
+
+def _is_disqualified_price_context(el: Any, price_text: str) -> bool:
+    """Return True if a price element belongs to upsells, protection plans, EMIs, or crossed-out MRP."""
+    if not price_text:
+        return True
+    lowered_text = price_text.lower()
+    if any(m in lowered_text for m in ("/mo", "per month", "emi", "installment", "save", "off")):
+        return True
+
+    # Inspect the element and up to 4 ancestor containers for disqualifying attributes;
+    # only check text content on the element itself and its immediate parent to avoid sibling-box false positives.
+    curr = el
+    for depth in range(5):
+        if curr is None:
+            break
+        if getattr(curr, "attrs", None):
+            if curr.attrs.get("data-a-strike") == "true":
+                return True
+            el_id = str(curr.attrs.get("id") or "").lower()
+            el_classes = " ".join(curr.attrs.get("class") or []).lower()
+            combined_attr = f"{el_id} {el_classes}"
+            if any(m in combined_attr for m in ("a-text-price", "basisprice", "strike", "protection", "warranty", "upsell", "bundle", "accessory", "cart-modal", "attach", "emi")):
+                return True
+        if depth <= 1:
+            curr_text = (clean_text(curr.get_text(" ", strip=True)) or "").lower()
+            if len(curr_text) < 250 and any(m in curr_text for m in ("add to your order", "protection plan", "applecare", "extended warranty", "no cost emi", "per month")):
+                return True
+        curr = getattr(curr, "parent", None)
+
+    return False
+
+
 class ProductExtractor:
     """Extracts structured, semi-structured, and verifiable evidence from HTML."""
 
@@ -201,6 +277,75 @@ class ProductExtractor:
         )
 
     @classmethod
+    def _extract_dom_product_title(cls, soup: BeautifulSoup) -> Optional[str]:
+        """Extract product title from DOM using specific product selectors before generic h1."""
+        priority_selectors = (
+            "#productTitle",
+            "#title",
+            "[data-testid='product-title']",
+            "h1[id*='title']",
+            "h1[class*='title']",
+        )
+        for sel in priority_selectors:
+            el = soup.select_one(sel)
+            if el:
+                candidate = clean_text(el.get_text())
+                if candidate and not _is_boilerplate_heading(candidate):
+                    return candidate
+
+        for h1 in soup.find_all("h1"):
+            candidate = clean_text(h1.get_text())
+            if candidate and not _is_boilerplate_heading(candidate):
+                return candidate
+
+        return None
+
+    @classmethod
+    def _extract_dom_product_price(cls, soup: BeautifulSoup) -> Optional[PriceFact]:
+        """Extract main product price from DOM while rejecting upsells, EMIs, and crossed-out prices."""
+        priority_selectors = (
+            "#corePriceDisplay_desktop_feature_div .a-price:not(.a-text-price) .a-offscreen",
+            "#corePrice_feature_div .a-price:not(.a-text-price) .a-offscreen",
+            "#apex_desktop .a-price:not(.a-text-price) .a-offscreen",
+            "#priceblock_ourprice",
+            "#priceblock_dealprice",
+        )
+        for sel in priority_selectors:
+            for el in soup.select(sel):
+                price_text = clean_text(el.get_text())
+                if not price_text or _is_disqualified_price_context(el, price_text):
+                    continue
+                num_p = parse_numeric_price(price_text)
+                if num_p is not None and num_p > 0:
+                    return PriceFact(
+                        displayed_text=price_text,
+                        numeric_amount=num_p,
+                        currency=detect_currency(price_text),
+                        is_inferred=False,
+                    )
+
+        fallback_candidates = (
+            soup.find_all(attrs={"data-price": True})
+            + soup.find_all(class_=re.compile(r"price|product-price|offer-price", re.I))
+            + soup.find_all(id=re.compile(r"price|product-price", re.I))
+        )
+        for el in fallback_candidates:
+            price_text = clean_text(el.get_text())
+            if not price_text or _is_disqualified_price_context(el, price_text):
+                continue
+            num_p = parse_numeric_price(price_text)
+            curr = detect_currency(price_text)
+            if num_p is not None and num_p > 0 and curr is not None:
+                return PriceFact(
+                    displayed_text=price_text,
+                    numeric_amount=num_p,
+                    currency=curr,
+                    is_inferred=True,
+                )
+
+        return None
+
+    @classmethod
     def extract_product_data(
         cls, html_content: str, source_url: str
     ) -> ExtractedProductDataResult:
@@ -231,7 +376,9 @@ class ProductExtractor:
         if json_ld_products:
             prod = json_ld_products[0]
             method = "json_ld"
-            product_name = clean_text(prod.get("name"))
+            ld_name = clean_text(prod.get("name"))
+            if not _is_boilerplate_heading(ld_name):
+                product_name = ld_name
             if isinstance(prod.get("brand"), dict):
                 brand = clean_text(prod["brand"].get("name"))
             elif isinstance(prod.get("brand"), str):
@@ -251,13 +398,15 @@ class ProductExtractor:
                 curr = offer_obj.get("priceCurrency")
                 avail = offer_obj.get("availability")
                 if raw_price is not None:
-                    displayed = f"{curr} {raw_price}" if curr else str(raw_price)
-                    price_fact = PriceFact(
-                        displayed_text=displayed,
-                        numeric_amount=parse_numeric_price(str(raw_price)),
-                        currency=curr or detect_currency(str(raw_price)),
-                        is_inferred=False,
-                    )
+                    num_p = parse_numeric_price(str(raw_price))
+                    if num_p is not None and num_p > 0:
+                        displayed = f"{curr} {raw_price}" if curr else str(raw_price)
+                        price_fact = PriceFact(
+                            displayed_text=displayed,
+                            numeric_amount=num_p,
+                            currency=curr or detect_currency(str(raw_price)),
+                            is_inferred=False,
+                        )
                 if avail:
                     availability = str(avail).split("/")[-1]
 
@@ -266,45 +415,36 @@ class ProductExtractor:
 
         # 2. Second priority / Fallback: OpenGraph tags
         if not product_name and open_graph.get("og:title"):
-            product_name = clean_text(open_graph["og:title"])
-            if method == "dom":
-                method = "opengraph"
+            og_name = clean_text(open_graph["og:title"])
+            if not _is_boilerplate_heading(og_name):
+                product_name = og_name
+                if method == "dom":
+                    method = "opengraph"
 
         if not price_fact and open_graph.get("og:price:amount"):
             raw_p = open_graph["og:price:amount"]
-            curr = open_graph.get("og:price:currency")
-            displayed = f"{curr} {raw_p}" if curr else raw_p
-            price_fact = PriceFact(
-                displayed_text=displayed,
-                numeric_amount=parse_numeric_price(raw_p),
-                currency=curr or detect_currency(raw_p),
-                is_inferred=False,
-            )
-            if method == "dom":
-                method = "opengraph"
+            num_p = parse_numeric_price(raw_p)
+            if num_p is not None and num_p > 0:
+                curr = open_graph.get("og:price:currency")
+                displayed = f"{curr} {raw_p}" if curr else raw_p
+                price_fact = PriceFact(
+                    displayed_text=displayed,
+                    numeric_amount=num_p,
+                    currency=curr or detect_currency(raw_p),
+                    is_inferred=False,
+                )
+                if method == "dom":
+                    method = "opengraph"
 
-        # 3. Third priority / Fallback: DOM Selectors
+        # 3. Third priority / Fallback: Explicit DOM Product Title Selectors (never blindly pick modal/cart h1)
         if not product_name:
-            h1 = soup.find("h1")
-            if h1:
-                product_name = clean_text(h1.get_text())
+            product_name = cls._extract_dom_product_title(soup)
 
+        extraction_warnings: List[str] = []
         if not price_fact:
-            # Look for price containers in DOM
-            price_el = (
-                soup.find(attrs={"data-price": True})
-                or soup.find(class_=re.compile(r"price|product-price|offer-price", re.I))
-                or soup.find(id=re.compile(r"price|product-price", re.I))
-            )
-            if price_el:
-                price_text = clean_text(price_el.get_text())
-                if price_text:
-                    price_fact = PriceFact(
-                        displayed_text=price_text,
-                        numeric_amount=parse_numeric_price(price_text),
-                        currency=detect_currency(price_text),
-                        is_inferred=True,
-                    )
+            price_fact = cls._extract_dom_product_price(soup)
+            if not price_fact:
+                extraction_warnings.append("Actual main product price could not be established; kept unavailable (null).")
 
         # Look for availability in DOM if still missing
         if not availability:
@@ -339,6 +479,7 @@ class ProductExtractor:
             warranty=warranty,
             return_policy=return_policy,
             extraction_method=method,
+            extraction_warnings=extraction_warnings,
         )
 
         is_valid, val_err, block_reason = cls.validate_page_for_product_evidence(
