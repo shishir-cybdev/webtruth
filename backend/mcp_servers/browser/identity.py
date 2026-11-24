@@ -125,6 +125,9 @@ VARIANT_SUFFIX_WORDS = {
     "edge",
     "turbo",
     "gt",
+    "e",
+    "a",
+    "xl",
 }
 
 CATEGORY_KEYWORDS: Dict[str, tuple[str, ...]] = {
@@ -192,6 +195,7 @@ SPEC_UNITS = {
     "gb", "tb", "mb", "kb",
     "hz", "mhz", "ghz",
     "mah", "w", "wh", "whr",
+    "mp", "megapixel", "megapixels",
     "inch", "inches", "cm", "mm",
 }
 
@@ -211,9 +215,9 @@ def extract_model_tokens(text: str, brand: Optional[str] = None) -> List[str]:
         "emerald", "edition", "smarter", "ai", "lifetime", "display", "warranty",
         "unlocked", "dual", "sim",
     } | SPEC_UNITS
-    # Normalize decimal sizes like '15.6 inch' -> '15.6' before alphanumeric tokenization
+    # Normalize decimal sizes like '15.6 inch' and camera/spec tokens like '13MP' before tokenization
     cleaned_text = re.sub(
-        r"\b\d+(?:\.\d+)?\s*(?:gb|tb|mb|kb|hz|mhz|ghz|mah|whr|wh|w|inches|inch|cm|mm)\b",
+        r"\b\d+(?:\.\d+)?\s*(?:gb|tb|mb|kb|hz|mhz|ghz|mah|whr|wh|w|mp|megapixels|megapixel|inches|inch|cm|mm)\b",
         " ",
         (text or "").lower(),
     )
@@ -349,15 +353,14 @@ def evaluate_product_identity(
     c_token_set = set(c_tokens)
     q_token_set = set(q_tokens)
 
-    # Check for variant-suffixed tokens like '13s' or '13r' when query has '13'
-    # Example: query=['13'], candidate=['13s'] -> RELATED_VARIANT
+    # Check for known variant-suffixed tokens like '13s', '13r', or '16e' when query has '13' or '16'
+    # Example: query=['13'], candidate=['13s'] -> RELATED_VARIANT; arbitrary spec suffixes are excluded
     for qt in q_tokens:
         if qt not in c_token_set:
-            # Check if candidate has a variant token sharing the base alphanumeric prefix (e.g. '13s', '13r', '13t', '13a')
             variant_matches = [
                 ct for ct in c_tokens
-                if (ct.startswith(qt) and len(ct) > len(qt) and ct[len(qt):].isalpha())
-                or (qt.startswith(ct) and len(qt) > len(ct) and qt[len(ct):].isalpha())
+                if (ct.startswith(qt) and len(ct) > len(qt) and ct[len(qt):] in VARIANT_SUFFIX_WORDS)
+                or (qt.startswith(ct) and len(qt) > len(ct) and qt[len(ct):] in VARIANT_SUFFIX_WORDS)
             ]
             if variant_matches:
                 return ProductIdentityMatchResult(

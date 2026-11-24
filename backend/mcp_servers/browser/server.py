@@ -244,6 +244,20 @@ def _is_ad_or_tracker_url(url: str) -> bool:
     return False
 
 
+def _is_better_link_text(new_text: Optional[str], existing_text: Optional[str]) -> bool:
+    """Return True if new_text is a more informative product-title anchor than existing_text."""
+    if not new_text or not new_text.strip():
+        return False
+    if not existing_text or not existing_text.strip():
+        return True
+
+    def _text_quality(txt: str) -> tuple[int, int]:
+        alpha_words = len(re.findall(r"[A-Za-z]{2,}", txt))
+        return (alpha_words, len(txt.strip()))
+
+    return _text_quality(new_text) > _text_quality(existing_text)
+
+
 def _candidate_text_from_link(url: str, link_text: Optional[str]) -> str:
     """Build clean candidate text from link text and readable URL slug (excluding opaque IDs)."""
     path = urlparse(url).path
@@ -353,7 +367,7 @@ async def discover_product_urls(
 
             soup = BeautifulSoup(page_data.html_content or "", "html.parser")
             per_domain_limit = max(max_results * 4, 12)
-            local_seen: set[str] = set()
+            seen_items: dict[str, DiscoveredUrlItem] = {}
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
                 abs_url = urljoin(page_data.final_url or search_url, href)
@@ -367,15 +381,18 @@ async def discover_product_urls(
                     continue
                 if any(m in parsed.path for m in product_markers):
                     clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                    if clean_url in local_seen:
-                        continue
-                    local_seen.add(clean_url)
                     link_text = a.get_text(" ", strip=True)[:160] or None
-                    local_found.append(
-                        DiscoveredUrlItem(url=clean_url, domain=domain, link_text=link_text)
-                    )
-                    if len(local_found) >= per_domain_limit:
+                    if clean_url in seen_items:
+                        existing = seen_items[clean_url]
+                        if _is_better_link_text(link_text, existing.link_text):
+                            existing.link_text = link_text
+                        continue
+                    if len(seen_items) >= per_domain_limit:
                         break
+                    seen_items[clean_url] = DiscoveredUrlItem(
+                        url=clean_url, domain=domain, link_text=link_text
+                    )
+            local_found.extend(seen_items.values())
             return local_found, None
         except Exception as ex:
             return [], f"{domain}: {ex}"
