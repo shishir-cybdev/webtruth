@@ -74,6 +74,22 @@ class InvestigationCreateRequest(BaseModel):
         from app.orchestrator.category import normalize_category
         return normalize_category(v)
 
+    @field_validator("target_urls")
+    @classmethod
+    def clean_target_urls(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return None
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for raw in v:
+            if not isinstance(raw, str):
+                continue
+            item = raw.strip()
+            if item and item not in seen:
+                seen.add(item)
+                cleaned.append(item)
+        return cleaned or None
+
 
 class InvestigationStepInfo(BaseModel):
     """Schema for individual MCP pipeline step status."""

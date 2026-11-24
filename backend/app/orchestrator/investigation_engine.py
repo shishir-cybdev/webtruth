@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
@@ -139,6 +140,15 @@ class InvestigationEngine:
         explicit_cat = normalize_category(category)
         resolved_cat = explicit_cat if explicit_cat is not None else classify_query_category(query)
 
+        cleaned_urls: List[str] = []
+        seen_urls: set[str] = set()
+        for raw_url in target_urls or []:
+            if isinstance(raw_url, str):
+                trimmed = raw_url.strip()
+                if trimmed and trimmed not in seen_urls:
+                    seen_urls.add(trimmed)
+                    cleaned_urls.append(trimmed)
+
         record = InvestigationRecord(
             investigation_id=inv_id,
             query=query.strip(),
@@ -149,7 +159,7 @@ class InvestigationEngine:
             current_stage=InvestigationStage.PLAN,
             created_at_utc=now,
             updated_at_utc=now,
-            target_urls=target_urls or [],
+            target_urls=cleaned_urls,
             stages=stages,
         )
         self.state_store.save_investigation(record)
@@ -251,6 +261,7 @@ class InvestigationEngine:
                     target_urls.append(f"file:///{std_fix.as_posix()}")
             else:
                 # Never guess or concatenate retailer URLs; use legitimate Browser MCP search discovery
+                discovery_timeout = float(os.getenv("ORCHESTRATOR_DISCOVERY_TIMEOUT_SECONDS", "45.0"))
                 try:
                     async with self.mcp.open_session("browser") as session:
                         disc_res, disc_log = await self.mcp.call_tool_on_session(
@@ -258,7 +269,7 @@ class InvestigationEngine:
                             "browser",
                             "discover_product_urls",
                             {"query": rec.query, "category": rec.category, "max_results": 4},
-                            timeout_seconds=25.0,
+                            timeout_seconds=discovery_timeout,
                         )
                         rec.stages[stage.value].tool_logs.append(disc_log)
                         rec.all_tool_logs.append(disc_log)
@@ -273,7 +284,10 @@ class InvestigationEngine:
                                 rec.warnings.append(note)
                 except Exception as ex:
                     logger.warning("URL discovery failed: %s", ex)
-                    rec.warnings.append(f"Product URL discovery unavailable: {ex}")
+                    rec.warnings.append(
+                        f"Automatic retailer discovery failed or timed out ({ex}). "
+                        "Supply explicit public product URLs to inspect specific pages directly."
+                    )
 
         plan_data = {
             "query": rec.query,
@@ -339,7 +353,7 @@ class InvestigationEngine:
                 try:
                     logger.info("Browser MCP opening: %s", url)
                     open_res, open_log = await self.mcp.call_tool_on_session(
-                        session, "browser", "open_product_page", {"url": url}, timeout_seconds=20.0
+                        session, "browser", "open_product_page", {"url": url}, timeout_seconds=30.0
                     )
                     rec.stages[stage.value].tool_logs.append(open_log)
                     rec.all_tool_logs.append(open_log)
