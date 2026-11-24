@@ -1,8 +1,10 @@
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
+import weakref
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -54,6 +56,33 @@ class MCPManager:
 
     def __init__(self) -> None:
         self.registry = registry
+        self._health_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
+        self._cached_health: Optional[MCPHealthResponse] = None
+        self._cached_health_at: float = 0.0
+
+    def _get_health_lock(self) -> asyncio.Lock:
+        """Return an asyncio.Lock bound to the current running event loop."""
+        loop = asyncio.get_running_loop()
+        lock = self._health_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._health_locks[loop] = lock
+        return lock
+
+    @staticmethod
+    def _get_health_cache_ttl() -> float:
+        """Read MCP_HEALTH_CACHE_TTL_SECONDS (default 60s; 0 disables caching)."""
+        raw = os.getenv("MCP_HEALTH_CACHE_TTL_SECONDS", "60")
+        try:
+            ttl = float(raw)
+            return max(0.0, ttl)
+        except ValueError:
+            return 60.0
+
+    def invalidate_health_cache(self) -> None:
+        """Clear any cached MCP health response."""
+        self._cached_health = None
+        self._cached_health_at = 0.0
 
     @asynccontextmanager
     async def open_session(
@@ -264,33 +293,53 @@ class MCPManager:
             )
 
     async def check_all_health(self) -> MCPHealthResponse:
-        """Audit health and availability across all registered servers in parallel."""
-        servers = self.registry.list_servers()
-        tasks = [self.check_server_health(s.name) for s in servers]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        """Audit health and availability sequentially across all registered servers with single-flight locking and TTL cache."""
+        ttl = self._get_health_cache_ttl()
+        now = time.monotonic()
+        if ttl > 0 and self._cached_health is not None and (now - self._cached_health_at) < ttl:
+            return self._cached_health
 
-        server_map: Dict[str, ServerHealthInfo] = {}
-        total_tools = 0
-        error_count = 0
+        lock = self._get_health_lock()
+        async with lock:
+            # Re-check cache after acquiring single-flight lock so concurrent callers share one probe
+            ttl = self._get_health_cache_ttl()
+            now = time.monotonic()
+            if ttl > 0 and self._cached_health is not None and (now - self._cached_health_at) < ttl:
+                return self._cached_health
 
-        for info in results:
-            server_map[info.server_name] = info
-            total_tools += info.tool_count
-            if info.status != ServerStatus.CONNECTED:
-                error_count += 1
+            servers = self.registry.list_servers()
+            results: List[ServerHealthInfo] = []
+            for s in servers:
+                info = await self.check_server_health(s.name)
+                results.append(info)
 
-        if error_count == 0 and len(servers) > 0:
-            status = "healthy"
-        elif error_count < len(servers):
-            status = "degraded"
-        else:
-            status = "unhealthy"
+            server_map: Dict[str, ServerHealthInfo] = {}
+            total_tools = 0
+            error_count = 0
 
-        return MCPHealthResponse(
-            status=status,
-            total_tools_count=total_tools,
-            servers=server_map,
-        )
+            for info in results:
+                server_map[info.server_name] = info
+                total_tools += info.tool_count
+                if info.status != ServerStatus.CONNECTED:
+                    error_count += 1
+
+            if error_count == 0 and len(servers) > 0:
+                status = "healthy"
+            elif error_count < len(servers):
+                status = "degraded"
+            else:
+                status = "unhealthy"
+
+            response = MCPHealthResponse(
+                status=status,
+                total_tools_count=total_tools,
+                servers=server_map,
+            )
+            if ttl > 0 and len(results) == len(servers):
+                self._cached_health = response
+                self._cached_health_at = time.monotonic()
+
+            return response
 
 
 mcp_manager = MCPManager()
