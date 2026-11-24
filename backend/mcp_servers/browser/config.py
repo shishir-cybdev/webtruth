@@ -50,8 +50,9 @@ class BrowserConfig:
     """Configuration for Browser MCP server."""
 
     # Navigation and script timeouts (in milliseconds)
-    PAGE_TIMEOUT_MS: int = int(os.getenv("BROWSER_PAGE_TIMEOUT_MS", "25000"))
-    DOM_WAIT_TIMEOUT_MS: int = int(os.getenv("BROWSER_DOM_WAIT_TIMEOUT_MS", "5000"))
+    PAGE_TIMEOUT_MS: int = int(os.getenv("BROWSER_PAGE_TIMEOUT_MS", "12000"))
+    DISCOVERY_TIMEOUT_MS: int = int(os.getenv("BROWSER_DISCOVERY_TIMEOUT_MS", "8000"))
+    DOM_WAIT_TIMEOUT_MS: int = int(os.getenv("BROWSER_DOM_WAIT_TIMEOUT_MS", "3000"))
 
     # Browser launch settings
     HEADLESS: bool = os.getenv("BROWSER_HEADLESS", "true").lower() in ("true", "1", "yes")

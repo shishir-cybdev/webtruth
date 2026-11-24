@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -223,47 +224,63 @@ async def discover_product_urls(
     blocked_sources: list[str] = []
     notes: list[str] = []
 
-    for domain, search_url, product_markers in search_endpoints:
-        if len(discovered) >= max_results:
-            break
+    async def _search_single_domain(
+        domain: str, search_url: str, product_markers: tuple[str, ...]
+    ) -> tuple[list[DiscoveredUrlItem], Optional[str]]:
+        local_found: list[DiscoveredUrlItem] = []
+        try:
+            page_data = await browser_manager.fetch_page(
+                search_url, timeout_ms=BrowserConfig.DISCOVERY_TIMEOUT_MS
+            )
+            if page_data.error or (page_data.status_code and page_data.status_code >= 400):
+                reason = page_data.error or f"HTTP {page_data.status_code}"
+                return [], f"{domain}: {reason}"
 
-        page_data = await browser_manager.fetch_page(search_url)
-        if page_data.error or (page_data.status_code and page_data.status_code >= 400):
-            reason = page_data.error or f"HTTP {page_data.status_code}"
-            blocked_sources.append(f"{domain}: {reason}")
-            continue
+            _, val_err, block_reason = ProductExtractor.validate_page_for_product_evidence(
+                source_url=search_url,
+                final_url=page_data.final_url,
+                status_code=page_data.status_code,
+                page_title=page_data.title,
+                html_content=page_data.html_content,
+            )
+            if block_reason == "captcha_or_antibot":
+                return [], f"{domain}: {val_err}"
 
-        is_valid, val_err, block_reason = ProductExtractor.validate_page_for_product_evidence(
-            source_url=search_url,
-            final_url=page_data.final_url,
-            status_code=page_data.status_code,
-            page_title=page_data.title,
-            html_content=page_data.html_content,
-        )
-        if block_reason == "captcha_or_antibot":
-            blocked_sources.append(f"{domain}: {val_err}")
-            continue
-
-        soup = BeautifulSoup(page_data.html_content or "", "html.parser")
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            abs_url = urljoin(page_data.final_url or search_url, href)
-            parsed = urlparse(abs_url)
-            if parsed.scheme not in ("http", "https"):
-                continue
-            allowed, _ = BrowserConfig.is_url_permitted(abs_url)
-            if not allowed:
-                continue
-            if any(m in parsed.path for m in product_markers):
-                clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                if clean_url not in seen_urls:
-                    seen_urls.add(clean_url)
+            soup = BeautifulSoup(page_data.html_content or "", "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                abs_url = urljoin(page_data.final_url or search_url, href)
+                parsed = urlparse(abs_url)
+                if parsed.scheme not in ("http", "https"):
+                    continue
+                allowed, _ = BrowserConfig.is_url_permitted(abs_url)
+                if not allowed:
+                    continue
+                if any(m in parsed.path for m in product_markers):
+                    clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
                     link_text = a.get_text(" ", strip=True)[:120] or None
-                    discovered.append(
+                    local_found.append(
                         DiscoveredUrlItem(url=clean_url, domain=domain, link_text=link_text)
                     )
-                    if len(discovered) >= max_results:
+                    if len(local_found) >= max_results:
                         break
+            return local_found, None
+        except Exception as ex:
+            return [], f"{domain}: {ex}"
+
+    # Run discovery concurrently with bounded timeout so one stalled retailer never blocks others
+    results = await asyncio.gather(
+        *[_search_single_domain(d, u, m) for d, u, m in search_endpoints],
+        return_exceptions=False,
+    )
+
+    for found_list, blk_err in results:
+        if blk_err:
+            blocked_sources.append(blk_err)
+        for item in found_list:
+            if item.url not in seen_urls and len(discovered) < max_results:
+                seen_urls.add(item.url)
+                discovered.append(item)
 
     if not discovered:
         notes.append(

@@ -42,30 +42,41 @@ class MCPManager:
         if not server_def:
             raise MCPServerConnectionError(f"Server '{server_name}' is not registered in ServerRegistry.")
 
-        timeout = timeout_seconds or server_def.timeout_seconds
+        init_timeout = timeout_seconds or server_def.timeout_seconds
         params = server_def.build_stdio_parameters()
 
         logger.info(
-            "Launching MCP subprocess for '%s' (module=%s, timeout=%ss)",
+            "Launching MCP subprocess for '%s' (module=%s, init_timeout=%ss)",
             server_name,
             server_def.module_name,
-            timeout,
+            init_timeout,
         )
 
         try:
-            async with asyncio.timeout(timeout):
-                async with stdio_client(params) as (read_stream, write_stream):
-                    async with ClientSession(read_stream, write_stream) as session:
+            async with stdio_client(params) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    async with asyncio.timeout(init_timeout):
                         init_result = await session.initialize()
-                        logger.debug(
-                            "MCP server '%s' initialized (serverInfo: %s)",
-                            server_name,
-                            getattr(init_result, "server_info", None),
-                        )
-                        yield session
+                    logger.debug(
+                        "MCP server '%s' initialized (serverInfo: %s)",
+                        server_name,
+                        getattr(init_result, "server_info", None),
+                    )
+                    yield session
         except TimeoutError as ex:
-            logger.error("Connection or initialization timed out for '%s' after %ss", server_name, timeout)
-            raise MCPTimeoutError(f"Server '{server_name}' timed out after {timeout}s") from ex
+            logger.error("Connection or initialization timed out for '%s' after %ss", server_name, init_timeout)
+            raise MCPTimeoutError(f"Server '{server_name}' timed out after {init_timeout}s") from ex
+        except (MCPTimeoutError, MCPToolExecutionError):
+            raise
+        except BaseExceptionGroup as eg:
+            # AnyIO TaskGroup wraps TimeoutError / MCPTimeoutError inside ExceptionGroup
+            if eg.subgroup(TimeoutError) or eg.subgroup(MCPTimeoutError):
+                logger.error("Connection or tool execution timed out for '%s' (%ss)", server_name, init_timeout)
+                raise MCPTimeoutError(f"Server '{server_name}' timed out after {init_timeout}s") from eg
+            if eg.subgroup(MCPToolExecutionError):
+                raise eg.subgroup(MCPToolExecutionError).exceptions[0] from eg
+            logger.error("TaskGroup error with MCP server '%s': %s", server_name, eg)
+            raise MCPServerConnectionError(f"Failed to connect to MCP server '{server_name}': {eg}") from eg
         except Exception as ex:
             logger.error("Failed to connect or maintain session with MCP server '%s': %s", server_name, ex)
             raise MCPServerConnectionError(f"Failed to connect to MCP server '{server_name}': {ex}") from ex

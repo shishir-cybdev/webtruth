@@ -82,8 +82,8 @@ class PlaywrightBrowserManager:
             )
             return self._context
 
-    async def fetch_page(self, url: str) -> FetchedPageData:
-        """Open a permitted URL and return HTML content and metadata with sensible timeouts."""
+    async def fetch_page(self, url: str, timeout_ms: Optional[int] = None) -> FetchedPageData:
+        """Open a permitted URL and return HTML content and metadata with bounded timeouts."""
         is_allowed, reason = BrowserConfig.is_url_permitted(url)
         if not is_allowed:
             logger.warning("Blocked access to disallowed URL '%s': %s", url, reason)
@@ -96,45 +96,62 @@ class PlaywrightBrowserManager:
                 error=reason,
             )
 
+        effective_timeout_ms = timeout_ms if timeout_ms is not None else BrowserConfig.PAGE_TIMEOUT_MS
+        hard_timeout_s = (effective_timeout_ms / 1000.0) + 2.5
+
         context = await self._ensure_browser()
         page: Optional[Page] = None
         try:
-            page = await context.new_page()
-            page.set_default_timeout(BrowserConfig.PAGE_TIMEOUT_MS)
+            async with asyncio.timeout(hard_timeout_s):
+                page = await context.new_page()
+                page.set_default_timeout(effective_timeout_ms)
 
-            logger.info("Navigating to %s", url)
-            response = await page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=BrowserConfig.PAGE_TIMEOUT_MS,
-            )
+                logger.info("Navigating to %s (timeout=%dms)", url, effective_timeout_ms)
+                response = await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=effective_timeout_ms,
+                )
 
-            # Optional brief wait for hydration/dynamic DOM elements if present
-            try:
-                await page.wait_for_timeout(500)
-            except Exception:
-                pass
+                # Brief wait for dynamic DOM elements without waiting indefinitely for networkidle
+                try:
+                    await page.wait_for_timeout(350)
+                except Exception:
+                    pass
 
-            title = await page.title()
-            final_url = page.url
-            status_code = response.status if response is not None else 200
-            html_content = await page.content()
+                title = await page.title()
+                final_url = page.url
+                status_code = response.status if response is not None else 200
+                html_content = await page.content()
 
-            logger.info(
-                "Successfully fetched '%s' (status=%s, title='%s', length=%d bytes)",
-                final_url,
-                status_code,
-                title,
-                len(html_content),
-            )
+                logger.info(
+                    "Successfully fetched '%s' (status=%s, title='%s', length=%d bytes)",
+                    final_url,
+                    status_code,
+                    title,
+                    len(html_content),
+                )
+                return FetchedPageData(
+                    source_url=url,
+                    final_url=final_url,
+                    title=title,
+                    status_code=status_code,
+                    html_content=html_content,
+                    error=None,
+                )
+        except TimeoutError:
+            logger.warning("Browser navigation timed out for '%s' after %dms", url, effective_timeout_ms)
             return FetchedPageData(
                 source_url=url,
-                final_url=final_url,
-                title=title,
-                status_code=status_code,
-                html_content=html_content,
-                error=None,
+                final_url=url,
+                title="",
+                status_code=504,
+                html_content="",
+                error=f"Browser navigation timed out after {effective_timeout_ms}ms",
             )
+        except asyncio.CancelledError:
+            logger.warning("Browser navigation cancelled for '%s'", url)
+            raise
         except Exception as e:
             logger.error("Error during browser navigation to '%s': %s", url, str(e))
             return FetchedPageData(

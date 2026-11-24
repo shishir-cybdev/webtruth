@@ -779,10 +779,12 @@ function InvestigateContent() {
           </div>
         )}
 
-        {/* 3D MCP Pipeline + Real Stage Tracker */}
+        {/* Persistent 3D MCP Pipeline Visualization in Live Mode */}
+        {mode === "real" && <MCPPipeline3DWrapper nodeStates={nodeStates} />}
+
+        {/* Real Stage Tracker */}
         {mode === "real" && realInvestigation && (
           <div className="space-y-6">
-            <MCPPipeline3DWrapper nodeStates={nodeStates} />
 
             <div className="glass rounded-2xl border border-slate-800 p-6">
               <div className="flex items-center justify-between mb-4">

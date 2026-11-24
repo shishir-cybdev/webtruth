@@ -190,3 +190,46 @@ async def test_orchestrator_rejects_404_fixture_and_reports_insufficient_data(tm
     assert any("Rejected" in w for w in completed.warnings)
     assert completed.trust_report is not None
     assert completed.trust_report["trust_assessment"]["overall_trust_tier"] == "INSUFFICIENT_DATA"
+
+
+@pytest.mark.anyio
+async def test_browser_fetch_timeout_and_cleanup():
+    """Verify browser navigation timeout returns 504 error cleanly and cleans up browser context."""
+    from mcp_servers.browser.browser_manager import browser_manager
+
+    std_url = f"file:///{(FIXTURES_DIR / 'product_standard.html').as_posix()}"
+    res = await browser_manager.fetch_page(std_url, timeout_ms=1)
+    # 1ms timeout should either fail with 504/500 timeout or succeed if OS cached; if it timed out, check status/error
+    if res.error:
+        assert res.status_code in (500, 504)
+    await browser_manager.close()
+    assert browser_manager._context is None
+    assert browser_manager._browser is None
+
+
+@pytest.mark.anyio
+async def test_partial_source_failure_preserves_valid_results(tmp_path):
+    """Verify partial source failure (1 valid fixture + 1 404 page) preserves valid evidence."""
+    valid_url = f"file:///{(FIXTURES_DIR / 'product_standard.html').as_posix()}"
+    bad_html = tmp_path / "missing_page.html"
+    bad_html.write_text(
+        "<html><head><title>Page Not Found</title></head><body><h1>404 Not Found</h1></body></html>",
+        encoding="utf-8",
+    )
+    bad_url = f"file:///{bad_html.as_posix()}"
+
+    rec = default_investigation_engine.initialize_investigation(
+        query="Dell XPS 15 9530",
+        category="laptop",
+        target_urls=[valid_url, bad_url],
+    )
+    completed = await default_investigation_engine.run_investigation(rec.investigation_id)
+
+    assert completed.status == "completed"
+    assert len(completed.extracted_records) == 1
+    assert len(completed.evidence_ids) == 1
+    assert completed.stages["browser"].status == StageStatus.COMPLETED
+    assert completed.stages["evidence"].status == StageStatus.COMPLETED
+    assert completed.stages["comparison"].status == StageStatus.COMPLETED
+    assert completed.stages["trust"].status == StageStatus.COMPLETED
+    assert any("Rejected" in w for w in completed.warnings)

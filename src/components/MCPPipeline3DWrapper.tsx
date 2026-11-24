@@ -116,17 +116,43 @@ export function MCPPipeline3DWrapper({ nodeStates }: { nodeStates: MCPNodeState 
   const webgl = checkWebGLSupport();
 
   return (
-    <div className="relative w-full h-56 sm:h-64 rounded-2xl glass border border-cyan-500/20 overflow-hidden bg-slate-950/60 mb-6">
+    <div className="relative w-full h-64 sm:h-72 rounded-2xl glass border border-cyan-500/20 overflow-hidden bg-slate-950/60 mb-6 flex flex-col">
       <div className="absolute top-3 left-4 z-10 flex items-center gap-2 pointer-events-none">
         <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
         <span className="text-[11px] font-mono uppercase tracking-wider text-cyan-400/90">
           3D MCP Execution Mesh
         </span>
       </div>
-      {webgl ? (
-        <MCPPipeline3DLazy nodeStates={nodeStates} reducedMotion={reducedMotion} />
-      ) : (
-        <MCPPipelineFallback nodeStates={nodeStates} />
+
+      <div className="flex-1 min-h-0 w-full">
+        {webgl ? (
+          <MCPPipeline3DLazy nodeStates={nodeStates} reducedMotion={reducedMotion} />
+        ) : (
+          <MCPPipelineFallback nodeStates={nodeStates} />
+        )}
+      </div>
+
+      {/* Stable React DOM status bar synced to 3D MCP nodes (avoids Drei Html portal unmount issues in React 19) */}
+      {webgl && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 px-3 pb-3 pt-1 z-10 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent">
+          {[
+            { key: "browser" as const, label: "Browser MCP", sub: "Playwright" },
+            { key: "evidence" as const, label: "Evidence MCP", sub: "SQLite Vault" },
+            { key: "comparison" as const, label: "Comparison MCP", sub: "Normalizer" },
+            { key: "trust" as const, label: "Trust MCP", sub: "Integrity" },
+          ].map((node) => (
+            <div
+              key={node.key}
+              className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800/80 backdrop-blur-md"
+            >
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold text-slate-200 truncate">{node.label}</div>
+                <div className="text-[9px] font-mono text-slate-500 truncate">{node.sub}</div>
+              </div>
+              <StatusBadge status={nodeStates[node.key]} />
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

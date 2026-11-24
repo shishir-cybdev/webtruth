@@ -254,6 +254,7 @@ class InvestigationEngine:
                             "browser",
                             "discover_product_urls",
                             {"query": rec.query, "category": rec.category, "max_results": 4},
+                            timeout_seconds=25.0,
                         )
                         rec.stages[stage.value].tool_logs.append(disc_log)
                         rec.all_tool_logs.append(disc_log)
@@ -334,7 +335,7 @@ class InvestigationEngine:
                 try:
                     logger.info("Browser MCP opening: %s", url)
                     open_res, open_log = await self.mcp.call_tool_on_session(
-                        session, "browser", "open_product_page", {"url": url}
+                        session, "browser", "open_product_page", {"url": url}, timeout_seconds=20.0
                     )
                     rec.stages[stage.value].tool_logs.append(open_log)
                     rec.all_tool_logs.append(open_log)
@@ -353,6 +354,7 @@ class InvestigationEngine:
                         "browser",
                         "extract_product_data",
                         {"url": url, "expected_category": rec.category},
+                        timeout_seconds=20.0,
                     )
                     rec.stages[stage.value].tool_logs.append(data_log)
                     rec.all_tool_logs.append(data_log)
@@ -365,7 +367,7 @@ class InvestigationEngine:
 
                     # Capture DOM evidence ONLY for validated product pages
                     evi_res, evi_log = await self.mcp.call_tool_on_session(
-                        session, "browser", "capture_page_evidence", {"url": url}
+                        session, "browser", "capture_page_evidence", {"url": url}, timeout_seconds=20.0
                     )
                     rec.stages[stage.value].tool_logs.append(evi_log)
                     rec.all_tool_logs.append(evi_log)

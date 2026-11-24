@@ -2,7 +2,7 @@
 
 import { useRef, useMemo } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Line, Points, PointMaterial, Html } from "@react-three/drei";
+import { Line, Points, PointMaterial } from "@react-three/drei";
 import * as THREE from "three";
 import type { BackendStepStatus } from "@/types/api";
 
@@ -20,10 +20,10 @@ const NODE_CONFIGS: Array<{
   position: [number, number, number];
   baseColor: string;
 }> = [
-  { key: "browser", label: "Browser MCP", subtitle: "Playwright", position: [-3.3, 0.15, 0], baseColor: "#22d3ee" },
-  { key: "evidence", label: "Evidence MCP", subtitle: "SQLite Vault", position: [-1.1, -0.25, 0.2], baseColor: "#4ade80" },
-  { key: "comparison", label: "Comparison MCP", subtitle: "Normalizer", position: [1.1, 0.25, -0.2], baseColor: "#a78bfa" },
-  { key: "trust", label: "Trust MCP", subtitle: "Integrity", position: [3.3, -0.15, 0], baseColor: "#38bdf8" },
+  { key: "browser", label: "Browser MCP", subtitle: "Playwright", position: [-3.3, 0.45, 0], baseColor: "#22d3ee" },
+  { key: "evidence", label: "Evidence MCP", subtitle: "SQLite Vault", position: [-1.1, 0.1, 0.2], baseColor: "#4ade80" },
+  { key: "comparison", label: "Comparison MCP", subtitle: "Normalizer", position: [1.1, 0.45, -0.2], baseColor: "#a78bfa" },
+  { key: "trust", label: "Trust MCP", subtitle: "Integrity", position: [3.3, 0.1, 0], baseColor: "#38bdf8" },
 ];
 
 function generateAmbientParticles(count: number): Float32Array {
@@ -56,15 +56,11 @@ function getStatusVisuals(status: BackendStepStatus, baseColor: string) {
 }
 
 function MCPNodeMesh({
-  label,
-  subtitle,
   position,
   status,
   baseColor,
   reducedMotion,
 }: {
-  label: string;
-  subtitle: string;
   position: [number, number, number];
   status: BackendStepStatus;
   baseColor: string;
@@ -91,15 +87,6 @@ function MCPNodeMesh({
       }
     }
   });
-
-  const statusText =
-    status === "running"
-      ? "ACTIVE"
-      : status === "completed"
-      ? "DONE"
-      : status === "failed"
-      ? "FAILED"
-      : "WAITING";
 
   return (
     <group position={position} scale={visuals.scale}>
@@ -129,25 +116,6 @@ function MCPNodeMesh({
           opacity={status === "pending" ? 0.25 : 0.8}
         />
       </mesh>
-
-      {/* Clean Label Overlay */}
-      <Html position={[0, -0.95, 0]} center distanceFactor={8} style={{ pointerEvents: "none" }}>
-        <div className="flex flex-col items-center whitespace-nowrap select-none">
-          <span
-            className="text-[11px] font-semibold tracking-wide px-2 py-0.5 rounded-md border backdrop-blur-md"
-            style={{
-              color: status === "pending" ? "#94a3b8" : "#f8fafc",
-              backgroundColor: "rgba(2, 8, 23, 0.78)",
-              borderColor: status === "pending" ? "rgba(71, 85, 105, 0.4)" : visuals.color,
-            }}
-          >
-            {label}
-          </span>
-          <span className="text-[9px] font-mono mt-0.5" style={{ color: visuals.color }}>
-            {subtitle} • {statusText}
-          </span>
-        </div>
-      </Html>
     </group>
   );
 }
@@ -268,8 +236,6 @@ export function MCPPipeline3D({
       {NODE_CONFIGS.map((cfg) => (
         <MCPNodeMesh
           key={cfg.key}
-          label={cfg.label}
-          subtitle={cfg.subtitle}
           position={cfg.position}
           status={nodeStates[cfg.key]}
           baseColor={cfg.baseColor}
