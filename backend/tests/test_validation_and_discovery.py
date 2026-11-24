@@ -233,3 +233,54 @@ async def test_partial_source_failure_preserves_valid_results(tmp_path):
     assert completed.stages["comparison"].status == StageStatus.COMPLETED
     assert completed.stages["trust"].status == StageStatus.COMPLETED
     assert any("Rejected" in w for w in completed.warnings)
+
+
+@pytest.mark.anyio
+async def test_long_seo_product_title_persists_without_taskgroup_error(tmp_path):
+    """Regression: 150+ char retailer SEO product titles must not fail SaveEvidenceRequest max_length=100."""
+    long_title = (
+        "OnePlus 13 | Smarter with OnePlus AI | Lifetime Display Warranty | "
+        "12GB RAM 256GB Storage Arctic Dawn Snapdragon 8 Elite 5G Smartphone - Amazon.in"
+    )
+    assert len(long_title) > 100
+    seo_html = tmp_path / "oneplus_long_seo.html"
+    seo_html.write_text(
+        f"""<!DOCTYPE html><html><head><title>{long_title}</title>
+        <script type="application/ld+json">{{"@context":"https://schema.org/","@type":"Product","name":"{long_title}","brand":{{"@type":"Brand","name":"OnePlus"}},"offers":{{"@type":"Offer","price":69999,"priceCurrency":"INR"}}}}</script>
+        </head><body><h1>{long_title}</h1><div class="product-price">₹69,999.00</div></body></html>""",
+        encoding="utf-8",
+    )
+    seo_url = f"file:///{seo_html.as_posix()}"
+
+    rec = default_investigation_engine.initialize_investigation(
+        query="OnePlus 13",
+        category="smartphone",
+        target_urls=[seo_url],
+    )
+    completed = await default_investigation_engine.run_investigation(rec.investigation_id)
+
+    assert completed.status == "completed"
+    assert completed.stages["evidence"].status == StageStatus.COMPLETED
+    assert len(completed.evidence_ids) == 1
+    assert completed.stages["comparison"].status == StageStatus.COMPLETED
+    assert completed.stages["trust"].status == StageStatus.COMPLETED
+
+
+@pytest.mark.anyio
+async def test_mcp_manager_unwraps_nested_taskgroup_tool_error():
+    """Verify MCPManager unwraps nested AnyIO ExceptionGroups into MCPToolExecutionError."""
+    from app.orchestrator.errors import MCPToolExecutionError
+    from app.orchestrator.mcp_manager import mcp_manager
+
+    with pytest.raises(MCPToolExecutionError):
+        async with mcp_manager.open_session("evidence") as session:
+            await mcp_manager.call_tool_on_session(
+                session,
+                "evidence",
+                "save_evidence",
+                {
+                    "investigation_id": "inv_bad",
+                    "product_id": "x" * 150,  # exceeds max_length=100
+                    "source_url": "https://amazon.in/dp/B0TEST",
+                },
+            )

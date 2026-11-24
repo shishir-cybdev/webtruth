@@ -456,14 +456,23 @@ class InvestigationEngine:
             return rec
 
         saved_evidence_ids: List[str] = []
+        persisted_records: List[Dict[str, Any]] = []
 
         async with self.mcp.open_session("evidence") as session:
             for item in rec.extracted_records:
+                raw_pid = (item.get("product_name") or rec.query or "product").strip()
+                slug_pid = re.sub(r"[^a-z0-9]+", "-", raw_pid.lower()).strip("-")[:80].strip("-")
+                if len(slug_pid) < 2:
+                    slug_pid = "product-item"
+
+                raw_title = item.get("source_title")
+                bounded_title = raw_title[:450] if isinstance(raw_title, str) and len(raw_title) > 450 else raw_title
+
                 save_payload = {
                     "investigation_id": rec.investigation_id,
-                    "product_id": (item.get("product_name") or rec.query).lower().replace(" ", "-"),
-                    "source_url": item["source_url"],
-                    "source_title": item.get("source_title"),
+                    "product_id": slug_pid,
+                    "source_url": item["source_url"][:2048],
+                    "source_title": bounded_title,
                     "capture_timestamp": item.get("capture_timestamp"),
                     "evidence_type": "retailer_price",
                     "extracted_claims": item.get("extracted_claims") or [],
@@ -475,27 +484,39 @@ class InvestigationEngine:
                         "specifications": item.get("specifications"),
                         "warranty": item.get("warranty"),
                         "return_policy": item.get("return_policy"),
+                        "full_source_title": raw_title if bounded_title != raw_title else None,
                     },
                 }
 
-                save_res, save_log = await self.mcp.call_tool_on_session(
-                    session, "evidence", "save_evidence", save_payload
-                )
-                rec.stages[stage.value].tool_logs.append(save_log)
-                rec.all_tool_logs.append(save_log)
+                try:
+                    save_res, save_log = await self.mcp.call_tool_on_session(
+                        session, "evidence", "save_evidence", save_payload, timeout_seconds=15.0
+                    )
+                    rec.stages[stage.value].tool_logs.append(save_log)
+                    rec.all_tool_logs.append(save_log)
 
-                eid = save_res.get("evidence_id")
-                if eid:
-                    saved_evidence_ids.append(eid)
-                    item["evidence_id"] = eid
-                    item["evidence_hash"] = save_res.get("evidence_hash")
-                    item["investigation_id"] = save_res.get("investigation_id")
-                    item["product_id"] = save_res.get("product_id")
-                    item["evidence_type"] = save_res.get("evidence_type")
+                    eid = save_res.get("evidence_id")
+                    if eid:
+                        saved_evidence_ids.append(eid)
+                        item["evidence_id"] = eid
+                        item["evidence_hash"] = save_res.get("evidence_hash")
+                        item["investigation_id"] = save_res.get("investigation_id")
+                        item["product_id"] = save_res.get("product_id")
+                        item["evidence_type"] = save_res.get("evidence_type")
+                        persisted_records.append(item)
+                except Exception as ex:
+                    logger.warning(
+                        "Failed to persist evidence for URL '%s': %s",
+                        item.get("source_url"),
+                        ex,
+                        exc_info=True,
+                    )
+                    rec.warnings.append(f"Evidence persistence failed for {item.get('source_url')}: {ex}")
 
         if not saved_evidence_ids:
-            raise StageExecutionError("evidence", "Evidence MCP failed to persist evidence records.")
+            raise StageExecutionError("evidence", "Evidence MCP failed to persist any evidence records.")
 
+        rec.extracted_records = persisted_records
         rec.evidence_ids = saved_evidence_ids
         self.state_store.save_investigation(rec)
         rec = self.state_store.update_stage_progress(

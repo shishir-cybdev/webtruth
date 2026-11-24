@@ -25,6 +25,30 @@ from app.orchestrator.server_registry import registry
 logger = logging.getLogger("webtruth.orchestrator.mcp_manager")
 
 
+def _extract_leaf_exception(
+    exc: BaseException, target_types: tuple[type[BaseException], ...]
+) -> Optional[BaseException]:
+    """Recursively unwrap nested AnyIO ExceptionGroups to find the first matching leaf exception."""
+    if isinstance(exc, target_types):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for sub in exc.exceptions:
+            found = _extract_leaf_exception(sub, target_types)
+            if found is not None:
+                return found
+    return None
+
+
+def _flatten_exception_messages(exc: BaseException) -> List[str]:
+    """Collect all leaf exception type names and messages from nested ExceptionGroups."""
+    if isinstance(exc, BaseExceptionGroup):
+        msgs: List[str] = []
+        for sub in exc.exceptions:
+            msgs.extend(_flatten_exception_messages(sub))
+        return msgs
+    return [f"{type(exc).__name__}: {exc}"]
+
+
 class MCPManager:
     """Manages real stdio MCP client subprocesses and tool execution using official MCP SDK."""
 
@@ -69,14 +93,17 @@ class MCPManager:
         except (MCPTimeoutError, MCPToolExecutionError):
             raise
         except BaseExceptionGroup as eg:
-            # AnyIO TaskGroup wraps TimeoutError / MCPTimeoutError inside ExceptionGroup
-            if eg.subgroup(TimeoutError) or eg.subgroup(MCPTimeoutError):
-                logger.error("Connection or tool execution timed out for '%s' (%ss)", server_name, init_timeout)
-                raise MCPTimeoutError(f"Server '{server_name}' timed out after {init_timeout}s") from eg
-            if eg.subgroup(MCPToolExecutionError):
-                raise eg.subgroup(MCPToolExecutionError).exceptions[0] from eg
-            logger.error("TaskGroup error with MCP server '%s': %s", server_name, eg)
-            raise MCPServerConnectionError(f"Failed to connect to MCP server '{server_name}': {eg}") from eg
+            leaf_details = "; ".join(_flatten_exception_messages(eg))
+            timeout_leaf = _extract_leaf_exception(eg, (TimeoutError, MCPTimeoutError))
+            if timeout_leaf is not None:
+                logger.error("Connection or tool execution timed out for '%s' (%ss): %s", server_name, init_timeout, leaf_details)
+                raise MCPTimeoutError(f"Server '{server_name}' timed out after {init_timeout}s ({leaf_details})") from timeout_leaf
+            tool_leaf = _extract_leaf_exception(eg, (MCPToolExecutionError,))
+            if tool_leaf is not None:
+                logger.error("Tool execution failed in session '%s': %s", server_name, leaf_details)
+                raise tool_leaf from eg
+            logger.error("TaskGroup error with MCP server '%s': %s", server_name, leaf_details, exc_info=True)
+            raise MCPServerConnectionError(f"Failed to connect to MCP server '{server_name}': {leaf_details}") from eg
         except Exception as ex:
             logger.error("Failed to connect or maintain session with MCP server '%s': %s", server_name, ex)
             raise MCPServerConnectionError(f"Failed to connect to MCP server '{server_name}': {ex}") from ex
