@@ -14,11 +14,12 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
-    # CORS Configuration - allow local Next.js frontend
+    # CORS Configuration - allow local Next.js dev and deployed Vercel frontend
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:3001",
+        "https://webtruth.vercel.app",
     ]
     
     # MCP Status (Phase 2B onward)

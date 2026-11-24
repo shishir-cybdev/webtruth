@@ -89,3 +89,13 @@ async def test_cors_headers():
             }
         )
         assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+        vercel_res = await client.options(
+            "/api/investigations",
+            headers={
+                "Origin": "https://webtruth.vercel.app",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert vercel_res.headers.get("access-control-allow-origin") == "https://webtruth.vercel.app"
+        assert vercel_res.headers.get("access-control-allow-credentials") == "true"

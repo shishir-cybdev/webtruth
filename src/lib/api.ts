@@ -7,8 +7,25 @@ import type {
   MCPHealthResponse,
 } from "@/types/api";
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000";
+const DEFAULT_PRODUCTION_API_URL = "https://webtruth.onrender.com";
+
+function resolveApiBaseUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim().replace(/\/$/, "");
+  if (configured) {
+    return configured;
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host !== "localhost" && host !== "127.0.0.1") {
+      return DEFAULT_PRODUCTION_API_URL;
+    }
+  } else if (process.env.NODE_ENV === "production") {
+    return DEFAULT_PRODUCTION_API_URL;
+  }
+  return "http://127.0.0.1:8000";
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 export class ApiError extends Error {
   status: number;
