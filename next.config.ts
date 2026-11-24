@@ -1,7 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
@@ -11,6 +10,13 @@ const nextConfig: NextConfig = {
         as: "*.css",
       },
     },
+  },
+  webpack(config) {
+    // Allow importing Three.js properly
+    config.resolve.extensionAlias = {
+      ".js": [".js", ".ts", ".tsx"],
+    };
+    return config;
   },
 };
 
