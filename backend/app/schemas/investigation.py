@@ -139,6 +139,14 @@ class InvestigationResponse(BaseModel):
         default=0,
         description="Count of MCP tool executions across all servers",
     )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Warnings or rejected source reasons recorded during investigation",
+    )
+    failures: List[str] = Field(
+        default_factory=list,
+        description="Failures recorded during investigation",
+    )
 
 
 class InvestigationListResponse(BaseModel):

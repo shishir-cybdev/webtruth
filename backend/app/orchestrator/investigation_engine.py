@@ -238,24 +238,37 @@ class InvestigationEngine:
         )
         await self.broadcast_event(rec.investigation_id, "stage_started", stage, StageStatus.RUNNING, "Planning research scope.")
 
-        # Determine target URLs if not explicitly provided
+        # Determine target URLs ONLY from explicit input, local fixtures, or real Browser MCP discovery
         target_urls = list(rec.target_urls)
         if not target_urls:
-            # Check for local fixture references in query or notes
             if "fixture" in rec.query.lower() or (rec.notes and "fixture" in rec.notes.lower()):
                 std_fix = FIXTURES_DIR / "product_standard.html"
                 if std_fix.exists():
                     target_urls.append(f"file:///{std_fix.as_posix()}")
             else:
-                # Target public domains from browser allowlist
-                # Formulate safe canonical URL targets based on query
-                q_clean = re.sub(r"[^a-zA-Z0-9\s\-]", "", rec.query).strip()
-                slug = re.sub(r"\s+", "-", q_clean.lower())
-                # Default permitted investigation targets
-                target_urls = [
-                    f"https://dell.com/in/p/{slug}-laptop",
-                    f"https://amazon.in/dp/{slug}",
-                ]
+                # Never guess or concatenate retailer URLs; use legitimate Browser MCP search discovery
+                try:
+                    async with self.mcp.open_session("browser") as session:
+                        disc_res, disc_log = await self.mcp.call_tool_on_session(
+                            session,
+                            "browser",
+                            "discover_product_urls",
+                            {"query": rec.query, "category": rec.category, "max_results": 4},
+                        )
+                        rec.stages[stage.value].tool_logs.append(disc_log)
+                        rec.all_tool_logs.append(disc_log)
+
+                        for item in disc_res.get("discovered_urls") or []:
+                            if item.get("url"):
+                                target_urls.append(item["url"])
+                        for blk in disc_res.get("blocked_sources") or []:
+                            rec.warnings.append(f"Search blocked: {blk}")
+                        for note in disc_res.get("discovery_notes") or []:
+                            if not target_urls:
+                                rec.warnings.append(note)
+                except Exception as ex:
+                    logger.warning("URL discovery failed: %s", ex)
+                    rec.warnings.append(f"Product URL discovery unavailable: {ex}")
 
         plan_data = {
             "query": rec.query,
@@ -297,6 +310,24 @@ class InvestigationEngine:
 
         extracted_records: List[Dict[str, Any]] = []
 
+        if not rec.target_urls:
+            rec.warnings.append("No valid product URLs were discovered or provided; Browser MCP extraction skipped.")
+            self.state_store.save_investigation(rec)
+            rec = self.state_store.update_stage_progress(
+                rec.investigation_id,
+                stage,
+                StageStatus.SKIPPED,
+                "Skipped: no valid public product URLs discovered or supplied.",
+            )
+            await self.broadcast_event(
+                rec.investigation_id,
+                "stage_completed",
+                stage,
+                StageStatus.SKIPPED,
+                "No target URLs to inspect.",
+            )
+            return rec
+
         # Connect to Browser MCP via stdio
         async with self.mcp.open_session("browser") as session:
             for url in rec.target_urls:
@@ -308,14 +339,31 @@ class InvestigationEngine:
                     rec.stages[stage.value].tool_logs.append(open_log)
                     rec.all_tool_logs.append(open_log)
 
-                    # Extract product data
+                    # Validate HTTP status & page eligibility BEFORE extracting/storing evidence
+                    page_status = open_res.get("page_status")
+                    if open_res.get("error") or not open_res.get("is_valid_product_page", True) or (page_status is not None and page_status >= 400):
+                        reason = open_res.get("error") or f"HTTP {page_status} / invalid page"
+                        logger.warning("Rejected source '%s' during open_product_page: %s", url, reason)
+                        rec.warnings.append(f"Rejected {url}: {reason}")
+                        continue
+
+                    # Extract product data with optional category validation
                     data_res, data_log = await self.mcp.call_tool_on_session(
-                        session, "browser", "extract_product_data", {"url": url}
+                        session,
+                        "browser",
+                        "extract_product_data",
+                        {"url": url, "expected_category": rec.category},
                     )
                     rec.stages[stage.value].tool_logs.append(data_log)
                     rec.all_tool_logs.append(data_log)
 
-                    # Capture DOM evidence
+                    if data_res.get("error") or not data_res.get("is_valid_product_page", True):
+                        reason = data_res.get("validation_error") or data_res.get("error") or "Invalid product page"
+                        logger.warning("Rejected source '%s' during extraction: %s", url, reason)
+                        rec.warnings.append(f"Rejected {url}: {reason}")
+                        continue
+
+                    # Capture DOM evidence ONLY for validated product pages
                     evi_res, evi_log = await self.mcp.call_tool_on_session(
                         session, "browser", "capture_page_evidence", {"url": url}
                     )
@@ -324,7 +372,7 @@ class InvestigationEngine:
 
                     price_obj = data_res.get("price") or {}
                     combined_record = {
-                        "source_url": url,
+                        "source_url": open_res.get("final_url") or url,
                         "source_title": open_res.get("page_title") or data_res.get("product_name"),
                         "product_name": data_res.get("product_name") or rec.query,
                         "brand": data_res.get("brand"),
@@ -346,23 +394,36 @@ class InvestigationEngine:
                     logger.warning("Browser MCP inspection failed for URL '%s': %s", url, ex)
                     rec.warnings.append(f"Browser inspection failed for {url}: {ex}")
 
-        if not extracted_records:
-            raise StageExecutionError("browser", "Browser MCP could not extract valid evidence from any target URL.")
-
         rec.extracted_records = extracted_records
         self.state_store.save_investigation(rec)
+        if not extracted_records:
+            rec = self.state_store.update_stage_progress(
+                rec.investigation_id,
+                stage,
+                StageStatus.FAILED,
+                "All target URLs failed product page validation (404, anti-bot block, or generic homepage).",
+            )
+            await self.broadcast_event(
+                rec.investigation_id,
+                "stage_completed",
+                stage,
+                StageStatus.FAILED,
+                "0 valid product sources extracted.",
+            )
+            return rec
+
         rec = self.state_store.update_stage_progress(
             rec.investigation_id,
             stage,
             StageStatus.COMPLETED,
-            f"Successfully inspected and extracted data from {len(extracted_records)} source(s).",
+            f"Successfully inspected and validated {len(extracted_records)} product source(s).",
         )
         await self.broadcast_event(
             rec.investigation_id,
             "stage_completed",
             stage,
             StageStatus.COMPLETED,
-            f"Extracted {len(extracted_records)} records from Browser MCP.",
+            f"Extracted {len(extracted_records)} validated records from Browser MCP.",
         )
         return rec
 
@@ -375,6 +436,22 @@ class InvestigationEngine:
             rec.investigation_id, stage, StageStatus.RUNNING, "Persisting evidence records in Evidence MCP."
         )
         await self.broadcast_event(rec.investigation_id, "stage_started", stage, StageStatus.RUNNING, "Evidence MCP active.")
+
+        if not rec.extracted_records:
+            rec = self.state_store.update_stage_progress(
+                rec.investigation_id,
+                stage,
+                StageStatus.SKIPPED,
+                "Skipped: no validated product sources were extracted to persist.",
+            )
+            await self.broadcast_event(
+                rec.investigation_id,
+                "stage_completed",
+                stage,
+                StageStatus.SKIPPED,
+                "Evidence persistence skipped (0 valid sources).",
+            )
+            return rec
 
         saved_evidence_ids: List[str] = []
 
@@ -443,6 +520,22 @@ class InvestigationEngine:
             rec.investigation_id, stage, StageStatus.RUNNING, "Normalizing specs and comparing prices in Comparison MCP."
         )
         await self.broadcast_event(rec.investigation_id, "stage_started", stage, StageStatus.RUNNING, "Comparison MCP active.")
+
+        if not rec.extracted_records:
+            rec = self.state_store.update_stage_progress(
+                rec.investigation_id,
+                stage,
+                StageStatus.SKIPPED,
+                "Skipped: no validated product sources available to compare.",
+            )
+            await self.broadcast_event(
+                rec.investigation_id,
+                "stage_completed",
+                stage,
+                StageStatus.SKIPPED,
+                "Comparison skipped (0 valid sources).",
+            )
+            return rec
 
         async with self.mcp.open_session("comparison") as session:
             # 1. Normalize each product
@@ -578,7 +671,7 @@ class InvestigationEngine:
                         "claimed_value": c,
                         "cited_evidence_ids": [eid] if eid else [],
                     })
-            if not claims_input:
+            if not claims_input and rec.evidence_ids:
                 claims_input = [
                     {"claim_id": "clm_def", "field": "Product", "claimed_value": rec.query, "cited_evidence_ids": rec.evidence_ids}
                 ]

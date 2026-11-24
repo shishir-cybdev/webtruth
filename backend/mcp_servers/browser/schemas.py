@@ -46,6 +46,8 @@ class OpenProductPageResult(BaseModel):
     page_status: Optional[int] = Field(default=None, description="HTTP status code (e.g. 200, 404)")
     capture_timestamp_utc: str = Field(default_factory=current_utc_iso, description="UTC timestamp of capture")
     is_allowed: bool = Field(..., description="Whether the domain was permitted by the allowlist policy")
+    is_valid_product_page: bool = Field(default=True, description="False if 404, CAPTCHA, or generic homepage")
+    block_reason: Optional[str] = Field(default=None, description="Reason if blocked or rejected")
     error: Optional[str] = Field(default=None, description="Error message if navigation failed")
 
 
@@ -57,6 +59,7 @@ class ExtractedProductDataResult(BaseModel):
     product_name: Optional[str] = Field(default=None, description="Extracted product title or name")
     brand: Optional[str] = Field(default=None, description="Extracted manufacturer or brand name")
     model: Optional[str] = Field(default=None, description="Extracted model identifier")
+    model_number: Optional[str] = Field(default=None, description="Extracted specific SKU or model number")
     price: Optional[PriceFact] = Field(default=None, description="Extracted price facts, or null if missing")
     availability: Optional[str] = Field(
         default=None,
@@ -72,6 +75,9 @@ class ExtractedProductDataResult(BaseModel):
         default="hybrid",
         description="Method used for extraction: 'json_ld', 'opengraph', 'dom', or 'hybrid'",
     )
+    is_valid_product_page: bool = Field(default=True, description="False if page failed product validation")
+    validation_error: Optional[str] = Field(default=None, description="Reason page was rejected as product evidence")
+    block_reason: Optional[str] = Field(default=None, description="Anti-bot, CAPTCHA, or HTTP block classification")
     error: Optional[str] = Field(default=None, description="Error explanation if extraction failed")
 
 
@@ -138,3 +144,21 @@ class PageMetadataResult(BaseModel):
     )
     capture_timestamp_utc: str = Field(default_factory=current_utc_iso, description="UTC timestamp of inspection")
     error: Optional[str] = Field(default=None, description="Error if inspection failed")
+
+
+class DiscoveredUrlItem(BaseModel):
+    """A permitted product URL legitimately discovered from a public search results page."""
+
+    url: str = Field(..., description="Discovered product page URL")
+    domain: str = Field(..., description="Permitted host domain")
+    link_text: Optional[str] = Field(default=None, description="Anchor text observed on search page")
+
+
+class DiscoverProductUrlsResult(BaseModel):
+    """Result of discover_product_urls MCP tool."""
+
+    query: str = Field(..., description="Search query")
+    category: Optional[str] = Field(default=None, description="Optional category")
+    discovered_urls: List[DiscoveredUrlItem] = Field(default_factory=list, description="Actually discovered product URLs")
+    blocked_sources: List[str] = Field(default_factory=list, description="Sources that blocked automated search (CAPTCHA/HTTP 403/503)")
+    discovery_notes: List[str] = Field(default_factory=list, description="Transparent notes on discovery outcome")

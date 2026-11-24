@@ -28,7 +28,7 @@ async def test_mcp_initialization_and_tool_discovery():
     """Verify stdio initialization and dynamic tool discovery for all four MCP servers."""
     servers = ["browser", "evidence", "comparison", "trust"]
     expected_tools = {
-        "browser": ["open_product_page", "extract_product_data", "extract_structured_product_data", "capture_page_evidence", "inspect_page_metadata"],
+        "browser": ["open_product_page", "extract_product_data", "extract_structured_product_data", "capture_page_evidence", "inspect_page_metadata", "discover_product_urls"],
         "evidence": ["save_evidence", "get_evidence", "search_evidence", "verify_evidence", "get_product_evidence_history", "detect_duplicate_evidence"],
         "comparison": ["normalize_product", "compare_prices", "compare_specifications", "compare_policies", "find_product_conflicts", "generate_comparison"],
         "trust": ["assess_evidence_quality", "check_source_freshness", "detect_unsupported_claims", "evaluate_source_consistency", "calculate_trust_assessment", "generate_trust_report"],
@@ -192,7 +192,7 @@ async def test_api_mcp_health_endpoint():
         assert res.status_code == 200
         data = res.json()
         assert data["status"] == "healthy"
-        assert data["total_tools_count"] == 23
+        assert data["total_tools_count"] == 24
         assert "browser" in data["servers"]
         assert "evidence" in data["servers"]
         assert "comparison" in data["servers"]

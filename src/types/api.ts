@@ -238,6 +238,8 @@ export interface InvestigationResponse {
   trust_report?: TrustReportResult | null;
   target_urls: string[];
   tool_logs_count: number;
+  warnings?: string[];
+  failures?: string[];
 }
 
 export interface InvestigationListResponse {

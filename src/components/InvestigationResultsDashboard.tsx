@@ -136,6 +136,25 @@ export function InvestigationResultsDashboard({
             </div>
           </div>
         )}
+
+        {/* Warnings & Rejected Sources */}
+        {((investigation.warnings && investigation.warnings.length > 0) ||
+          (investigation.failures && investigation.failures.length > 0)) && (
+          <div className="mt-4 rounded-xl bg-amber-500/10 border border-amber-500/25 p-4 space-y-1.5 text-xs">
+            <div className="font-semibold text-amber-300 flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              Source Validation &amp; Access Warnings
+            </div>
+            <ul className="space-y-1 text-amber-200/80 pl-5 list-disc">
+              {(investigation.warnings || []).map((w, idx) => (
+                <li key={`w-${idx}`}>{w}</li>
+              ))}
+              {(investigation.failures || []).map((f, idx) => (
+                <li key={`f-${idx}`} className="text-red-300">{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {/* Observed Prices & Sources */}

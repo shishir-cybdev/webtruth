@@ -30,6 +30,21 @@ from mcp_servers.comparison.schemas import (
 
 logger = logging.getLogger("webtruth.comparison.service")
 
+NON_SPEC_METADATA_KEYS = {
+    "page_title",
+    "heading_h1",
+    "meta_description",
+    "price_snippet",
+    "canonical_url",
+    "source_url",
+    "source_title",
+    "capture_timestamp",
+    "evidence_hash",
+    "url",
+    "title",
+    "status",
+}
+
 
 def get_domain(url: Optional[str]) -> str:
     """Extract domain host safely."""
@@ -329,10 +344,10 @@ class ComparisonService:
         unavail_items: List[SpecComparisonItem] = []
 
         all_fields = list(core_keys)
-        # Collect any other spec keys present across all products
+        # Collect any other spec keys present across all products (excluding non-spec page metadata)
         for p in products:
             for k in p.other_specs.keys():
-                if k not in all_fields:
+                if k.strip().lower() not in NON_SPEC_METADATA_KEYS and k not in all_fields:
                     all_fields.append(k)
 
         for field in all_fields:
@@ -498,6 +513,34 @@ class ComparisonService:
             summary=summary,
         )
 
+    def are_products_comparable(self, products: List[NormalizedProduct]) -> tuple[bool, Optional[str]]:
+        """Require meaningful matching product fields before treating sources as the same product."""
+        if len(products) < 2:
+            return True, None
+
+        brands = {
+            p.brand.normalized_value.lower()
+            for p in products
+            if p.brand and p.brand.normalized_value and p.brand.normalized_value.lower() != "unknown"
+        }
+        if len(brands) > 1:
+            return False, f"Mismatched product brands detected ({', '.join(sorted(brands))}); sources do not describe the same product."
+
+        # Check meaningful name token overlap when both products have names
+        stop_words = {"the", "and", "with", "for", "new", "official", "store", "india", "online", "unknown", "product"}
+        token_sets = []
+        for p in products:
+            tokens = {t for t in re.findall(r"[a-z0-9]+", (p.product_name or "").lower()) if len(t) >= 2 and t not in stop_words}
+            if tokens:
+                token_sets.append(tokens)
+
+        if len(token_sets) >= 2:
+            shared = set.intersection(*token_sets)
+            if len(shared) == 0:
+                return False, "Product names share no common identifying tokens; sources appear unrelated."
+
+        return True, None
+
     def find_product_conflicts(
         self,
         products: List[NormalizedProduct],
@@ -506,9 +549,20 @@ class ComparisonService:
         """Detect and isolate factual contradictions across sources."""
         conflicts: List[ProductConflictItem] = []
 
+        comparable, mismatch_reason = self.are_products_comparable(products)
+        if not comparable:
+            # Do not emit spec contradictions across unrelated/mismatched products
+            return ProductConflictResult(
+                has_conflicts=False,
+                conflicts_count=0,
+                conflicts=[],
+            )
+
         # Check core hardware conflicts
         spec_result = self.compare_specifications(products)
         for diff in spec_result.different_fields:
+            if diff.field_name.strip().lower() in NON_SPEC_METADATA_KEYS:
+                continue
             claims_list = []
             for src, val in diff.values_by_source.items():
                 matching_p = next(
@@ -582,16 +636,22 @@ class ComparisonService:
 
             # Specs normalization
             specs = item.get("specifications") or {}
-            # Fallback: if specs is empty, extract from extracted_claims if present
+            # Fallback: if specs is empty, extract from extracted_claims if present (ignoring page metadata)
             if not specs and item.get("extracted_claims"):
                 claims = item["extracted_claims"]
                 for c in claims:
-                    if "=" in c:
-                        k, v = c.split("=", 1)
-                        specs[k.strip()] = v.strip()
-                    elif ":" in c:
-                        k, v = c.split(":", 1)
-                        specs[k.strip()] = v.strip()
+                    raw_c = c
+                    if raw_c.startswith("SPECIFICATION:"):
+                        raw_c = raw_c[len("SPECIFICATION:"):].strip()
+                    if "=" in raw_c:
+                        k, v = raw_c.split("=", 1)
+                    elif ":" in raw_c:
+                        k, v = raw_c.split(":", 1)
+                    else:
+                        continue
+                    k_clean = k.strip()
+                    if k_clean.lower() not in NON_SPEC_METADATA_KEYS:
+                        specs[k_clean] = v.strip()
 
             p = self.normalize_product(
                 product_name=item.get("product_name") or item.get("source_title") or "Unknown Product",
@@ -643,6 +703,10 @@ class ComparisonService:
                 "These products may represent different hardware revisions or generations."
             )
 
+        comparable, mismatch_reason = self.are_products_comparable(normalized_prods)
+        if not comparable and mismatch_reason:
+            warnings.append(mismatch_reason)
+
         if not spec_res.configuration_match:
             warnings.append(
                 "Hardware configuration mismatch detected (RAM, Storage, CPU, or GPU capacities differ). "
@@ -669,7 +733,7 @@ class ComparisonService:
 
         return ComprehensiveComparisonResult(
             product_identity=identity,
-            configuration_match=spec_res.configuration_match and len(model_numbers) <= 1,
+            configuration_match=comparable and spec_res.configuration_match and len(model_numbers) <= 1,
             configuration_warnings=warnings,
             price_comparison=price_res,
             spec_comparison=spec_res,

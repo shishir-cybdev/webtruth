@@ -105,6 +105,8 @@ def map_record_to_response(rec: InvestigationRecord) -> InvestigationResponse:
         trust_report=rec.trust_report,
         target_urls=rec.target_urls,
         tool_logs_count=len(rec.all_tool_logs),
+        warnings=rec.warnings,
+        failures=rec.failures,
     )
 
 

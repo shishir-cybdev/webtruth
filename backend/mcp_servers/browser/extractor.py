@@ -321,12 +321,18 @@ class ProductExtractor:
                     warranty = v
                     break
 
-        return ExtractedProductDataResult(
+        model_number = None
+        if json_ld_products:
+            p0 = json_ld_products[0]
+            model_number = p0.get("mpn") or p0.get("sku")
+
+        result = ExtractedProductDataResult(
             source_url=source_url,
             capture_timestamp_utc=timestamp,
             product_name=product_name,
             brand=brand,
             model=model,
+            model_number=str(model_number) if model_number else None,
             price=price_fact,
             availability=availability,
             specifications=specs,
@@ -334,6 +340,132 @@ class ProductExtractor:
             return_policy=return_policy,
             extraction_method=method,
         )
+
+        is_valid, val_err, block_reason = cls.validate_page_for_product_evidence(
+            source_url=source_url,
+            final_url=source_url,
+            status_code=200,
+            page_title=clean_text(soup.title.get_text() if soup.title else ""),
+            html_content=html_content,
+            extracted=result,
+            has_json_ld_product=bool(json_ld_products),
+        )
+        result.is_valid_product_page = is_valid
+        result.validation_error = val_err
+        result.block_reason = block_reason
+        if not is_valid:
+            # Do not keep generic homepage/error titles as product_name
+            if block_reason in ("not_found_page", "captcha_or_antibot", "generic_homepage", "http_error"):
+                result.product_name = None
+        return result
+
+    @classmethod
+    def validate_page_for_product_evidence(
+        cls,
+        source_url: str,
+        final_url: Optional[str],
+        status_code: Optional[int],
+        page_title: Optional[str],
+        html_content: str,
+        extracted: Optional[ExtractedProductDataResult] = None,
+        has_json_ld_product: bool = False,
+        expected_category: Optional[str] = None,
+    ) -> tuple[bool, Optional[str], Optional[str]]:
+        """Validate whether a fetched page is a genuine, unblocked product page."""
+        from urllib.parse import urlparse
+
+        if status_code is not None and status_code >= 400:
+            if status_code == 404:
+                return False, "Page Not Found (HTTP 404)", "not_found_page"
+            if status_code in (403, 429, 503):
+                return False, f"Retailer blocked automated access (HTTP {status_code})", "captcha_or_antibot"
+            return False, f"HTTP error status {status_code}", "http_error"
+
+        title_lower = (page_title or "").lower()
+        soup = BeautifulSoup(html_content or "", "html.parser")
+        body_text = (clean_text(soup.get_text(" ")[:3500]) or "").lower()
+        h1_el = soup.find("h1")
+        h1_lower = (clean_text(h1_el.get_text()) or "").lower() if h1_el else ""
+
+        captcha_markers = [
+            "robot check",
+            "enter the characters you see",
+            "verify you are human",
+            "just a moment...",
+            "attention required! | cloudflare",
+            "access denied",
+            "automated access",
+            "sorry, we just need to make sure you're not a robot",
+        ]
+        for marker in captcha_markers:
+            if marker in title_lower or marker in body_text:
+                return (
+                    False,
+                    "Retailer presented an anti-bot or CAPTCHA challenge (not bypassed per policy)",
+                    "captcha_or_antibot",
+                )
+
+        not_found_markers = [
+            "page not found",
+            "404 not found",
+            "404 error",
+            "sorry! we couldn't find that page",
+            "looking for something?",
+            "we couldn't find the page",
+            "this page isn't available",
+        ]
+        for marker in not_found_markers:
+            if marker in title_lower or marker in h1_lower:
+                return False, f"Page Not Found / Error page detected ('{page_title}')", "not_found_page"
+
+        parsed = urlparse(final_url or source_url)
+        is_root_path = parsed.scheme in ("http", "https") and parsed.path.strip("/") == ""
+        has_product_signals = bool(
+            has_json_ld_product
+            or (extracted and (extracted.price or len(extracted.specifications) > 0))
+        )
+
+        generic_titles = [
+            "online shopping site in india",
+            "online shopping india",
+            "dell official site",
+            "computers, monitors & technology solutions",
+        ]
+        if (is_root_path or any(g in title_lower for g in generic_titles)) and not has_product_signals:
+            return (
+                False,
+                f"Generic retailer homepage detected without product data ('{page_title}')",
+                "generic_homepage",
+            )
+
+        if extracted and not extracted.product_name and not has_product_signals:
+            return (
+                False,
+                "No product identity, price, or specifications found on page",
+                "no_product_identity",
+            )
+
+        if expected_category and extracted:
+            pname_lower = f"{extracted.product_name or ''} {page_title or ''} {h1_lower}".lower()
+            cat_lower = expected_category.lower()
+            if cat_lower in ("smartphone", "phone", "mobile") and any(
+                w in pname_lower for w in ("laptop", "notebook", "desktop", "monitor")
+            ):
+                return (
+                    False,
+                    f"Product category mismatch: requested '{expected_category}', page describes '{extracted.product_name}'",
+                    "category_mismatch",
+                )
+            if cat_lower == "laptop" and any(
+                w in pname_lower for w in ("smartphone", "earbuds", "refrigerator", "washing machine")
+            ):
+                return (
+                    False,
+                    f"Product category mismatch: requested '{expected_category}', page describes '{extracted.product_name}'",
+                    "category_mismatch",
+                )
+
+        return True, None, None
 
     @classmethod
     def generate_page_evidence(
