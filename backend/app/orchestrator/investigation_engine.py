@@ -346,23 +346,54 @@ class InvestigationEngine:
                         reason = open_res.get("error") or f"HTTP {page_status} / invalid page"
                         logger.warning("Rejected source '%s' during open_product_page: %s", url, reason)
                         rec.warnings.append(f"Rejected {url}: {reason}")
+                        rec.rejected_candidates.append({
+                            "source_url": open_res.get("final_url") or url,
+                            "product_name": open_res.get("page_title"),
+                            "match_status": open_res.get("block_reason") or "HTTP_OR_PAGE_ERROR",
+                            "reason": reason,
+                            "capture_timestamp": open_res.get("capture_timestamp_utc") or current_utc_iso(),
+                        })
                         continue
 
-                    # Extract product data with optional category validation
+                    # Extract product data with strict token-aware identity & category validation
                     data_res, data_log = await self.mcp.call_tool_on_session(
                         session,
                         "browser",
                         "extract_product_data",
-                        {"url": url, "expected_category": rec.category},
+                        {
+                            "url": url,
+                            "expected_category": rec.category,
+                            "expected_query": rec.query,
+                        },
                         timeout_seconds=20.0,
                     )
                     rec.stages[stage.value].tool_logs.append(data_log)
                     rec.all_tool_logs.append(data_log)
 
+                    match_status = data_res.get("match_status")
                     if data_res.get("error") or not data_res.get("is_valid_product_page", True):
                         reason = data_res.get("validation_error") or data_res.get("error") or "Invalid product page"
-                        logger.warning("Rejected source '%s' during extraction: %s", url, reason)
-                        rec.warnings.append(f"Rejected {url}: {reason}")
+                        price_obj = data_res.get("price") or {}
+                        diag = {
+                            "source_url": open_res.get("final_url") or url,
+                            "product_name": data_res.get("product_name") or open_res.get("page_title"),
+                            "brand": data_res.get("brand"),
+                            "model": data_res.get("model"),
+                            "raw_displayed_price": price_obj.get("displayed_text"),
+                            "currency": price_obj.get("currency"),
+                            "numeric_price": price_obj.get("numeric_amount"),
+                            "match_status": match_status or data_res.get("block_reason") or "REJECTED",
+                            "reason": reason,
+                            "capture_timestamp": data_res.get("capture_timestamp_utc") or current_utc_iso(),
+                        }
+                        if match_status == "RELATED_VARIANT":
+                            logger.info("Separated related variant '%s': %s", url, reason)
+                            rec.related_variants.append(diag)
+                            rec.warnings.append(f"Separated variant {url} (excluded from exact match): {reason}")
+                        else:
+                            logger.warning("Rejected source '%s' during extraction: %s", url, reason)
+                            rec.rejected_candidates.append(diag)
+                            rec.warnings.append(f"Rejected {url}: {reason}")
                         continue
 
                     # Capture DOM evidence ONLY for validated product pages

@@ -107,6 +107,8 @@ def map_record_to_response(rec: InvestigationRecord) -> InvestigationResponse:
         tool_logs_count=len(rec.all_tool_logs),
         warnings=rec.warnings,
         failures=rec.failures,
+        related_variants=rec.related_variants,
+        rejected_candidates=rec.rejected_candidates,
     )
 
 

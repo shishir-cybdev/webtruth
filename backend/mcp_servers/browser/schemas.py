@@ -78,6 +78,12 @@ class ExtractedProductDataResult(BaseModel):
     is_valid_product_page: bool = Field(default=True, description="False if page failed product validation")
     validation_error: Optional[str] = Field(default=None, description="Reason page was rejected as product evidence")
     block_reason: Optional[str] = Field(default=None, description="Anti-bot, CAPTCHA, or HTTP block classification")
+    match_status: Optional[str] = Field(
+        default=None,
+        description="Product identity match classification: EXACT_MATCH, RELATED_VARIANT, ACCESSORY, BRAND_MISMATCH, MODEL_MISMATCH, CATEGORY_MISMATCH, INSUFFICIENT_IDENTITY",
+    )
+    match_reason: Optional[str] = Field(default=None, description="Explanation of product identity match result")
+    extracted_category: Optional[str] = Field(default=None, description="Inferred product category from page content")
     error: Optional[str] = Field(default=None, description="Error explanation if extraction failed")
 
 

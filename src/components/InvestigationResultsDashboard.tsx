@@ -519,6 +519,66 @@ export function InvestigationResultsDashboard({
           )}
         </div>
       )}
+
+      {/* Related Variants (Explicitly separated from exact-match comparison) */}
+      {investigation.related_variants && investigation.related_variants.length > 0 && (
+        <div className="glass rounded-2xl border border-violet-500/20 p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-base font-semibold text-slate-100">
+              Related Model Variants ({investigation.related_variants.length})
+            </h3>
+            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/30">
+              EXCLUDED FROM EXACT MATCH
+            </span>
+          </div>
+          <p className="text-xs text-slate-400 mb-3">
+            These products are related variants (e.g., S/R/Pro editions) and were excluded from the exact-match price comparison.
+          </p>
+          <div className="space-y-2">
+            {investigation.related_variants.map((rv, idx) => (
+              <div key={idx} className="rounded-xl bg-slate-900/60 border border-slate-800 p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-200 truncate">{rv.product_name || rv.source_url}</div>
+                  <div className="text-slate-400 mt-0.5">{rv.reason}</div>
+                  <a href={rv.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 mt-1 break-all">
+                    {rv.source_url} <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                </div>
+                <div className="text-left sm:text-right shrink-0 font-mono text-violet-300">
+                  {rv.raw_displayed_price || "Unavailable"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Rejected Candidates Diagnostics */}
+      {investigation.rejected_candidates && investigation.rejected_candidates.length > 0 && (
+        <div className="glass rounded-2xl border border-slate-800 p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-slate-200">
+              Rejected Non-Matching Candidates ({investigation.rejected_candidates.length})
+            </h3>
+            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/25">
+              NOT STORED AS EVIDENCE
+            </span>
+          </div>
+          <div className="space-y-2">
+            {investigation.rejected_candidates.map((rc, idx) => (
+              <div key={idx} className="rounded-lg bg-slate-950/60 border border-slate-800/80 p-3 text-xs">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="font-semibold text-slate-300 truncate">{rc.product_name || rc.source_url}</span>
+                  <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/25 shrink-0">
+                    {rc.match_status}
+                  </span>
+                </div>
+                <p className="text-slate-400">{rc.reason}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

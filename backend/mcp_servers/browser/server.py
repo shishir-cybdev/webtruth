@@ -8,6 +8,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp_servers.browser.browser_manager import browser_manager
 from mcp_servers.browser.config import BrowserConfig
 from mcp_servers.browser.extractor import ProductExtractor
+from mcp_servers.browser.identity import ProductMatchStatus, evaluate_product_identity
 from mcp_servers.browser.schemas import (
     DiscoverProductUrlsResult,
     DiscoveredUrlItem,
@@ -76,10 +77,14 @@ async def open_product_page(url: str) -> OpenProductPageResult:
     description=(
         "Extract product name, brand, model, displayed price (preserving original currency), "
         "stock availability, technical specifications table, warranty, and return policy. "
-        "Validates HTTP status and page identity; rejects 404s, CAPTCHAs, and generic homepages."
+        "Validates HTTP status, page identity, and strict token-aware match against expected_query."
     ),
 )
-async def extract_product_data(url: str, expected_category: Optional[str] = None) -> ExtractedProductDataResult:
+async def extract_product_data(
+    url: str,
+    expected_category: Optional[str] = None,
+    expected_query: Optional[str] = None,
+) -> ExtractedProductDataResult:
     """Extract product specifications and pricing facts from a public product page."""
     logger.info("Tool extract_product_data called with url=%s", url)
     page_data = await browser_manager.fetch_page(url)
@@ -112,6 +117,30 @@ async def extract_product_data(url: str, expected_category: Optional[str] = None
     extracted.block_reason = block_reason
     if not is_valid and block_reason in ("not_found_page", "captcha_or_antibot", "generic_homepage", "http_error"):
         extracted.product_name = None
+        return extracted
+
+    # Strict token-aware product identity matching against expected_query
+    if expected_query:
+        id_match = evaluate_product_identity(
+            query=expected_query,
+            extracted_product_name=extracted.product_name,
+            extracted_brand=extracted.brand,
+            extracted_model=extracted.model or extracted.model_number,
+            page_title=page_data.title,
+            specs=extracted.specifications,
+            source_url=page_data.final_url or url,
+            expected_category=expected_category,
+        )
+        extracted.match_status = id_match.match_status.value
+        extracted.match_reason = id_match.reason
+        extracted.extracted_category = id_match.extracted_category
+        if not extracted.brand and id_match.extracted_brand:
+            extracted.brand = id_match.extracted_brand
+        if id_match.match_status != ProductMatchStatus.EXACT_MATCH:
+            extracted.is_valid_product_page = False
+            extracted.validation_error = id_match.reason
+            extracted.block_reason = id_match.match_status.value
+
     return extracted
 
 

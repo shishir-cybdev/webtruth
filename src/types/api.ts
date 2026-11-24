@@ -240,6 +240,25 @@ export interface InvestigationResponse {
   tool_logs_count: number;
   warnings?: string[];
   failures?: string[];
+  related_variants?: Array<{
+    source_url: string;
+    product_name?: string | null;
+    brand?: string | null;
+    model?: string | null;
+    raw_displayed_price?: string | null;
+    currency?: string | null;
+    numeric_price?: number | null;
+    match_status: string;
+    reason: string;
+    capture_timestamp?: string;
+  }>;
+  rejected_candidates?: Array<{
+    source_url: string;
+    product_name?: string | null;
+    match_status: string;
+    reason: string;
+    capture_timestamp?: string;
+  }>;
 }
 
 export interface InvestigationListResponse {

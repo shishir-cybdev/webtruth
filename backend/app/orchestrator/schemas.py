@@ -96,6 +96,8 @@ class InvestigationRecord(BaseModel):
     plan_data: Optional[Dict[str, Any]] = Field(default=None)
     target_urls: List[str] = Field(default_factory=list)
     extracted_records: List[Dict[str, Any]] = Field(default_factory=list)
+    related_variants: List[Dict[str, Any]] = Field(default_factory=list)
+    rejected_candidates: List[Dict[str, Any]] = Field(default_factory=list)
     evidence_ids: List[str] = Field(default_factory=list)
     comparison_result: Optional[Dict[str, Any]] = Field(default=None)
     trust_report: Optional[Dict[str, Any]] = Field(default=None)

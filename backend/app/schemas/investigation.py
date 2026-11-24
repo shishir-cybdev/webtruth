@@ -147,6 +147,14 @@ class InvestigationResponse(BaseModel):
         default_factory=list,
         description="Failures recorded during investigation",
     )
+    related_variants: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Related product variants separated from exact-match comparison (e.g. OnePlus 13S)",
+    )
+    rejected_candidates: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Rejected non-matching candidates (accessories, brand/model mismatches, 404s, CAPTCHAs)",
+    )
 
 
 class InvestigationListResponse(BaseModel):
